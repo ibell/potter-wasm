@@ -138,12 +138,16 @@ fn b2_orientational<F: Fn(f64, f64, f64, f64) -> f64>(
             0.0
         }
     };
+    // Absolute-tolerance floor on the raw integral (Angstrom^3): 0.03 here maps to
+    // ~0.005 cm^3/mol (the SI rounding), so B2 near its Boyle zero stops on
+    // absolute rather than *relative* error (which would chase forever / hit the
+    // eval cap) while keeping the validated accuracy elsewhere.
     let (i, _e, nev) = hcubature(
         4,
         &integrand,
         &[s_lo, 0.0, 0.0, 0.0],
         &[1.0, PI, PI, 2.0 * PI],
-        1e-13,
+        0.03,
         reltol,
         20_000_000,
     );
@@ -158,14 +162,30 @@ fn b2_orientational<F: Fn(f64, f64, f64, f64) -> f64>(
 ///   V_ij = A exp(-a R) - f6(b,R) C6/R^6 - f8(b,R) C8/R^8 + q_i q_j / R
 /// with Tang-Toennies damping f_2n = 1 - exp(-bR) sum_{k=0}^{2n} (bR)^k/k!.
 pub struct RigidLinear {
-    sites: Vec<(f64, usize, f64)>,          // (offset d in A, type index, charge)
-    coeffs: HashMap<(usize, usize), [f64; 5]>, // (A, alpha, b, C6, C8) by ordered type-pair
+    sites: Vec<(f64, usize, f64)>, // (offset d in A, type index, charge)
+    ntypes: usize,
+    table: Vec<[f64; 5]>, // (A, alpha, b, C6, C8), flat ntypes*ntypes (symmetric)
 }
 
 impl RigidLinear {
+    /// Build from a type-pair coefficient map; flattened to a dense table so the
+    /// hot loop does an array index, not a hash lookup, per site-site term.
+    fn new(
+        sites: Vec<(f64, usize, f64)>,
+        ntypes: usize,
+        coeffs: HashMap<(usize, usize), [f64; 5]>,
+    ) -> Self {
+        let mut table = vec![[0.0; 5]; ntypes * ntypes];
+        for (&(i, j), &c) in &coeffs {
+            table[i * ntypes + j] = c;
+            table[j * ntypes + i] = c;
+        }
+        RigidLinear { sites, ntypes, table }
+    }
+
     #[inline]
     fn site_site(&self, ti: usize, tj: usize, r: f64) -> f64 {
-        let [a, alpha, b, c6, c8] = self.coeffs[&(ti.min(tj), ti.max(tj))];
+        let [a, alpha, b, c6, c8] = self.table[ti * self.ntypes + tj];
         let br = b * r;
         let (mut term, mut s6, mut s8) = (1.0, 0.0, 0.0);
         for k in 0..=8 {
@@ -227,7 +247,7 @@ pub fn n2_hellmann() -> RigidLinear {
     coeffs.insert((1, 1), [0.299460243665e7, 2.15319940621, 2.42577961527, 0.146889670654e8, 0.0]);
     coeffs.insert((1, 2), [-0.819908034347e7, 2.84661195657, 2.02508542307, -0.129841807274e8, 0.0]);
     coeffs.insert((2, 2), [0.163947777734e8, 2.99548316813, 1.97117981681, 0.107874613877e8, 0.0]);
-    RigidLinear { sites, coeffs }
+    RigidLinear::new(sites, 3, coeffs)
 }
 
 /// Hellmann (2014) ab initio CO2-CO2 potential: 7 sites, types A/B/C/D, with C6
@@ -253,7 +273,7 @@ pub fn co2_hellmann() -> RigidLinear {
     coeffs.insert((2, 2), [-0.103079402689e8, 2.98535796569, 2.72634741238, 0.126349448908e9, -0.496759975158e9]);
     coeffs.insert((2, 3), [0.340824968085e8, 2.75870881239, 2.44815795987, -0.285769208067e9, 0.122323855871e10]);
     coeffs.insert((3, 3), [-0.915027698701e8, 2.87267355769, 2.27614875317, 0.551179708953e9, -0.131218053988e10]);
-    RigidLinear { sites, coeffs }
+    RigidLinear::new(sites, 4, coeffs)
 }
 
 /// Generic two-centre Lennard-Jones (2CLJ): two identical LJ sites a distance

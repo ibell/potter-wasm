@@ -164,7 +164,10 @@ pub fn hcubature<F: Fn(&[f64]) -> f64>(
         split: s0,
     });
 
-    while total_err > abstol.max(reltol * total_val.abs()) && nevals < maxevals {
+    // Combined tolerance: absolute floor + relative term (the SUNDIALS/scipy
+    // convention, err <= abstol + reltol*|I|) — a single smooth criterion rather
+    // than a hard max() switch between the two regimes.
+    while total_err > abstol + reltol * total_val.abs() && nevals < maxevals {
         let r = match heap.pop() {
             Some(r) => r,
             None => break,
