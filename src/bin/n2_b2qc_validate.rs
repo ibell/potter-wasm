@@ -7,7 +7,7 @@ const DATA: &str = include_str!("n2_b2qc_hellmann.csv"); // "T,B2_cl+qc"
 
 fn main() {
     let n2 = n2_hellmann();
-    let mu = 14.0067; // amu, reduced mass of the N2 pair = m(N2)/2
+    let mu = 14.0067; // amu = M(N2)/2, the two-body reduced mass of the N2-N2 pair
     let inertia = 8.473; // amu*A^2, N2 moment of inertia (B0 = 1.9896 cm^-1)
 
     println!("Hellmann N2 B2 + first-order quantum correction vs SI column 3 [cm^3/mol]");

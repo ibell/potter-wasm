@@ -290,23 +290,12 @@ impl RigidLinear {
         (g, gp, gpp)
     }
 
-    /// First-order quantum-correction term q12 (Hellmann Eq. 18-19), computed
-    /// ANALYTICALLY: the translational Laplacian (Coulomb part is identically zero
-    /// since 1/R is harmonic) and the rotational angular Laplacians of U, weighted
-    /// by 1/mu and 1/I and the Boltzmann factor. `u0` is U at the centre.
-    fn q_corr(
-        &self,
-        com2: [f64; 3],
-        u1: [f64; 3],
-        u2: [f64; 3],
-        u0: f64,
-        t: f64,
-        inv_mu: f64,
-        inv_i: f64,
-    ) -> f64 {
-        if !u0.is_finite() {
-            return 0.0;
-        }
+    /// The bracket [ (1/mu) nabla^2_trans U + (1/I) sum rot-Laplacians U ] of the
+    /// quantum correction, computed ANALYTICALLY via site-site v', v''. The
+    /// translational Laplacian uses the type-pair part only (the Coulomb Laplacian
+    /// is identically zero since 1/R is harmonic), which is what kills the
+    /// neutral-molecule cancellation roundoff that breaks finite differences.
+    fn qc_bracket(&self, com2: [f64; 3], u1: [f64; 3], u2: [f64; 3], inv_mu: f64, inv_i: f64) -> f64 {
         let (a1, b1) = perp_axes(u1);
         let (a2, b2) = perp_axes(u2);
         let mut lap_t = 0.0;
@@ -351,13 +340,24 @@ impl RigidLinear {
                 }
             }
         }
-        Q_CONST / (t * t) * (-u0 / t).exp() * (inv_mu * lap_t + inv_i * rot)
+        inv_mu * lap_t + inv_i * rot
     }
 
     /// B2(T) with the first-order Wigner-Kirkwood quantum correction (Hellmann
-    /// Eq. 22): integrate (Mayer - q12). `mu_amu` is the reduced mass of the
-    /// molecule pair, `i_amu_a2` the molecular moment of inertia (amu*Angstrom^2).
+    /// Eq. 22): integrate (Mayer - q12), q12 = (hbar^2/24(kBT)^2) e^{-U/T} bracket.
+    /// `mu_amu` = reduced mass of the molecule pair, `i_amu_a2` = moment of inertia.
     pub fn b2_quantum(&self, t: f64, reltol: f64, mu_amu: f64, i_amu_a2: f64) -> (f64, usize) {
+        self.b2_corrected(t, reltol, mu_amu, i_amu_a2, false)
+    }
+
+    /// B2(T) with the quadratic Feynman-Hibbs effective potential (Hellmann's CO2
+    /// method): compute B2 classically with U -> U + (hbar^2/24 kBT) bracket. To
+    /// first order in hbar^2 this equals the WK correction; it resums higher order.
+    pub fn b2_qfh(&self, t: f64, reltol: f64, mu_amu: f64, i_amu_a2: f64) -> (f64, usize) {
+        self.b2_corrected(t, reltol, mu_amu, i_amu_a2, true)
+    }
+
+    fn b2_corrected(&self, t: f64, reltol: f64, mu_amu: f64, i_amu_a2: f64, qfh: bool) -> (f64, usize) {
         let (inv_mu, inv_i) = (1.0 / mu_amu, 1.0 / i_amu_a2);
         let rmin = 2.0;
         let s_lo = rmin / (1.0 + rmin);
@@ -372,12 +372,21 @@ impl RigidLinear {
             let (u1, u2) = (axis(th1, 0.0), axis(th2, phi));
             let com2 = [0.0, 0.0, r];
             let u = self.energy_vec(com2, u1, u2);
-            let (mayer, q) = if u.is_finite() {
-                ((-u / t).exp() - 1.0, self.q_corr(com2, u1, u2, u, t, inv_mu, inv_i))
+            let mayer = if !u.is_finite() {
+                -1.0
             } else {
-                (-1.0, 0.0)
+                let bracket = self.qc_bracket(com2, u1, u2, inv_mu, inv_i);
+                if qfh {
+                    // QFH: classical Mayer with the effective potential U + dU
+                    let du = Q_CONST / t * bracket;
+                    (-(u + du) / t).exp() - 1.0
+                } else {
+                    // WK: f - q, q = (Q_CONST/T^2) e^{-U/T} bracket
+                    let q = Q_CONST / (t * t) * (-u / t).exp() * bracket;
+                    ((-u / t).exp() - 1.0) - q
+                }
             };
-            let val = r * r * jac * th1.sin() * th2.sin() * (mayer - q);
+            let val = r * r * jac * th1.sin() * th2.sin() * mayer;
             if val.is_finite() {
                 val
             } else {

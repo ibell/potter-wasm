@@ -172,9 +172,24 @@ mod tests {
     }
 
     #[test]
+    fn co2_qfh_matches_si_tabulated() {
+        // Quadratic Feynman-Hibbs B2 vs Hellmann CO2 SI tabulated B_QFH (V_B).
+        // mu = reduced mass of the CO2-CO2 pair = M(CO2)/2 = 22.0045 amu (the
+        // two-body translational reduced mass; nothing to do with C/O masses).
+        // I = 43.202 amu A^2 (CO2 moment of inertia).
+        use potter_poc::molecule::co2_hellmann;
+        let co2 = co2_hellmann();
+        for &(t, b_qfh) in &[(250.0, -184.16), (400.0, -59.87), (700.0, -1.30)] {
+            let (qfh, _) = co2.b2_qfh(t, 1e-4, 22.0045, 43.202);
+            assert!((qfh - b_qfh).abs() < 0.1, "T={t}: QFH {qfh} vs SI {b_qfh}");
+        }
+    }
+
+    #[test]
     fn n2_quantum_correction_matches_si() {
         // First-order Wigner-Kirkwood quantum correction vs Hellmann SI column 3
-        // (B2 classical + quantum). N2: mu = m(N2)/2 = 14.0067, I = 8.473 amu A^2.
+        // (B2 classical + quantum). mu = reduced mass of the N2-N2 pair =
+        // M(N2)/2 = 14.0067 amu (two-body translational reduced mass); I = 8.473.
         use potter_poc::molecule::n2_hellmann;
         let n2 = n2_hellmann();
         for &(t, si_clqc) in &[(90.0, -195.57), (200.0, -35.66), (500.0, 16.61)] {
