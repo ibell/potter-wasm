@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>potter-poc — B₂ in the browser</title>
+<style>
+  :root { --fg:#1a1a2e; --mut:#666; --accent:#2a6df4; --exact:#e0533d; --line:#ddd; }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.5 -apple-system, system-ui, sans-serif; color: var(--fg);
+         max-width: 880px; margin: 24px auto; padding: 0 16px; }
+  h1 { font-size: 20px; margin: 0 0 2px; }
+  .sub { color: var(--mut); margin: 0 0 18px; font-size: 13px; }
+  fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin: 0 0 14px; }
+  legend { font-weight: 600; font-size: 13px; padding: 0 6px; }
+  label { display: inline-block; margin-right: 14px; font-size: 13px; }
+  input, select, textarea { font: inherit; padding: 4px 6px; border: 1px solid #bbb; border-radius: 5px; }
+  input[type=number] { width: 72px; }
+  textarea { width: 100%; font-family: ui-monospace, Menlo, monospace; font-size: 13px; margin-top: 6px; }
+  button { font: inherit; font-weight: 600; padding: 7px 18px; border: 0; border-radius: 6px;
+           background: var(--accent); color: #fff; cursor: pointer; }
+  button:disabled { background: #aaa; cursor: default; }
+  .row { margin: 8px 0; }
+  .note { font-size: 12px; color: var(--mut); }
+  #status { font-size: 13px; margin: 10px 0; }
+  .err { color: var(--exact); }
+  table { border-collapse: collapse; width: 100%; margin-top: 10px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 3px 10px; border-bottom: 1px solid #eee; font-size: 13px; }
+  th { color: var(--mut); font-weight: 600; }
+  td:first-child, th:first-child { text-align: left; }
+  canvas { border: 1px solid var(--line); border-radius: 8px; margin-top: 12px; max-width: 100%; }
+  code { background: #f3f3f7; padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+  .layout { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-start; }
+  .layout > div { flex: 1 1 360px; }
+</style>
+</head>
+<body>
+  <h1>Second virial coefficient B₂(T) — in the browser</h1>
+  <p class="sub">Type a pair potential V(r). It is compiled to a WebAssembly module
+     <em>in your browser</em> (AOT) and run natively to integrate
+     B₂ = −2π ∫₀<sup>∞</sup> (e<sup>−V/T</sup>−1) r² dr. Reduced units.</p>
+
+  <fieldset>
+    <legend>potential</legend>
+    <div class="row">
+      <label>preset
+        <select id="preset">
+          <option value="lj">Lennard-Jones (12-6)</option>
+          <option value="inv">Inverse power  ε(σ/r)ⁿ</option>
+          <option value="custom">Custom…</option>
+        </select>
+      </label>
+      <label id="nwrap" hidden>n <input id="nexp" type="number" value="12" min="4" step="1" /></label>
+      <label>ε <input id="eps" type="number" value="1" step="0.1" /></label>
+      <label>σ <input id="sig" type="number" value="1" step="0.1" /></label>
+    </div>
+    <div class="row">
+      <textarea id="dsl" rows="2" spellcheck="false">4*eps*((sig/r)**12 - (sig/r)**6)</textarea>
+      <div class="note">Python-like: <code>+ - * /</code>, <code>**</code> power,
+        <code>exp ln log sqrt sin cos abs pow</code>, variables <code>r</code>, <code>eps</code>, <code>sig</code>.</div>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>temperature range</legend>
+    <label>T*min <input id="tmin" type="number" value="1.3" step="0.1" /></label>
+    <label>T*max <input id="tmax" type="number" value="8" step="0.5" /></label>
+    <label>points <input id="npts" type="number" value="24" min="2" step="1" /></label>
+    <button id="go" disabled>Compute B₂(T)</button>
+  </fieldset>
+
+  <div id="status">loading wasm…</div>
+
+  <div class="layout">
+    <div><canvas id="plot" width="430" height="320"></canvas></div>
+    <div><div id="tablewrap"></div></div>
+  </div>
+
+<script>
+const WASM_B64 = "__WASM_B64__";
+
+// ---- shared compute core (identical logic to node/run-aot-browser.mjs) ----
+const ENV = { env: { exp: Math.exp, ln: Math.log, log10: Math.log10,
+                     sin: Math.sin, cos: Math.cos, tan: Math.tan, powf: Math.pow } };
+let ex = null; // our module's exports
+
+function compileChild(dsl) {
+  const enc = new TextEncoder().encode(dsl);
+  const sp = ex.poc_alloc(enc.length);
+  new Uint8Array(ex.memory.buffer, sp, enc.length).set(enc);
+  const ret = ex.poc_compile_wasm(sp, enc.length); // BigInt
+  ex.poc_dealloc(sp, enc.length);
+  if (ret === 0n) throw new Error("could not parse potential");
+  const ptr = Number(ret >> 32n), len = Number(ret & 0xffffffffn);
+  const bytes = new Uint8Array(ex.memory.buffer, ptr, len).slice();
+  ex.poc_free(ptr, len);
+  return bytes;
+}
+function makePotential(dsl) {
+  const bytes = compileChild(dsl);                 // child module is tiny (<4KB)
+  const inst = new WebAssembly.Instance(new WebAssembly.Module(bytes), ENV);
+  return { fn: inst.exports.potential, size: bytes.length };
+}
+function b2(fn, eps, sig, T, n = 40000) {
+  // composite Simpson over s in [0,1), r = s/(1-s)
+  let sum = 0;
+  for (let i = 0; i <= n; i++) {
+    const s = i / n, om = 1 - s;
+    let val = 0;
+    if (om > 0) {
+      const r = s / om, jac = 1 / (om * om);
+      const V = fn(r, eps, sig);
+      const m = Number.isFinite(V) ? Math.exp(-V / T) - 1 : -1;
+      val = m * r * r * jac;
+      if (!Number.isFinite(val)) val = 0;
+    }
+    const w = i === 0 || i === n ? 1 : i % 2 === 1 ? 4 : 2;
+    sum += w * val;
+  }
+  return (-2 * Math.PI * sum) / (3 * n);
+}
+const b2LjExact = (T, eps, sig) => sig ** 3 * ex.poc_b2_lj_series(T / eps, 80);
+const b2InvExact = (T, eps, sig, n) =>
+  n > 3 ? ((2 * Math.PI) / 3) * sig ** 3 * ex.poc_tgamma(1 - 3 / n) * (T / eps) ** (-3 / n) : NaN;
+
+// ---- UI ----
+const $ = (id) => document.getElementById(id);
+const presetSel = $("preset"), dslEl = $("dsl"), nwrap = $("nwrap"), nexp = $("nexp");
+
+function syncPreset() {
+  const p = presetSel.value;
+  nwrap.hidden = p !== "inv";
+  if (p === "lj") { dslEl.value = "4*eps*((sig/r)**12 - (sig/r)**6)"; dslEl.readOnly = true; }
+  else if (p === "inv") { dslEl.value = `eps*(sig/r)**${parseInt(nexp.value) || 12}`; dslEl.readOnly = true; }
+  else { dslEl.readOnly = false; }
+}
+presetSel.onchange = syncPreset;
+nexp.oninput = () => { if (presetSel.value === "inv") syncPreset(); };
+
+function exactFor(T, eps, sig) {
+  const p = presetSel.value;
+  if (p === "lj") return b2LjExact(T, eps, sig);
+  if (p === "inv") return b2InvExact(T, eps, sig, parseInt(nexp.value) || 12);
+  return NaN; // custom: no closed form
+}
+
+function compute() {
+  const eps = parseFloat($("eps").value), sig = parseFloat($("sig").value);
+  const tmin = parseFloat($("tmin").value), tmax = parseFloat($("tmax").value);
+  const np = Math.max(2, parseInt($("npts").value) || 2);
+  let pot;
+  try { pot = makePotential(dslEl.value); }
+  catch (e) { $("status").innerHTML = `<span class="err">✗ ${e.message}</span>`; return; }
+
+  const rows = [];
+  let hasExact = false;
+  for (let i = 0; i < np; i++) {
+    const T = tmin + (tmax - tmin) * (i / (np - 1));
+    const num = b2(pot.fn, eps, sig, T);
+    const exa = exactFor(T, eps, sig);
+    if (Number.isFinite(exa)) hasExact = true;
+    rows.push({ T, num, exa });
+  }
+  $("status").innerHTML =
+    `✓ compiled <code>${dslEl.value.replace(/</g,"&lt;")}</code> to a ${pot.size}-byte wasm module, ` +
+    `run natively for ${np} temperatures.` +
+    (hasExact ? "" : " <span class=note>(no closed form for a custom potential)</span>");
+  renderTable(rows, hasExact);
+  renderPlot(rows, hasExact);
+}
+
+function renderTable(rows, hasExact) {
+  let h = "<table><tr><th>T*</th><th>B₂ (wasm)</th>" +
+          (hasExact ? "<th>B₂ (exact)</th><th>|Δ|</th>" : "") + "</tr>";
+  for (const r of rows) {
+    h += `<tr><td>${r.T.toFixed(3)}</td><td>${r.num.toFixed(5)}</td>`;
+    if (hasExact)
+      h += `<td>${Number.isFinite(r.exa) ? r.exa.toFixed(5) : "—"}</td>` +
+           `<td>${Number.isFinite(r.exa) ? Math.abs(r.num - r.exa).toExponential(1) : "—"}</td>`;
+    h += "</tr>";
+  }
+  $("tablewrap").innerHTML = h + "</table>";
+}
+
+function renderPlot(rows, hasExact) {
+  const c = $("plot"), g = c.getContext("2d"), W = c.width, H = c.height;
+  const m = { l: 52, r: 12, t: 12, b: 34 };
+  g.clearRect(0, 0, W, H);
+  const Ts = rows.map(r => r.T);
+  let vals = rows.map(r => r.num).filter(Number.isFinite);
+  if (hasExact) vals = vals.concat(rows.map(r => r.exa).filter(Number.isFinite));
+  const xmin = Math.min(...Ts), xmax = Math.max(...Ts);
+  let ymin = Math.min(...vals, 0), ymax = Math.max(...vals, 0);
+  const pad = (ymax - ymin) * 0.08 || 1; ymin -= pad; ymax += pad;
+  const X = (t) => m.l + (W - m.l - m.r) * (t - xmin) / (xmax - xmin || 1);
+  const Y = (v) => H - m.b - (H - m.t - m.b) * (v - ymin) / (ymax - ymin || 1);
+
+  // axes + zero line
+  g.strokeStyle = "#ccc"; g.fillStyle = "#666"; g.font = "11px sans-serif";
+  g.beginPath(); g.moveTo(m.l, m.t); g.lineTo(m.l, H - m.b); g.lineTo(W - m.r, H - m.b); g.stroke();
+  if (ymin < 0 && ymax > 0) {
+    g.strokeStyle = "#e8e8e8"; g.beginPath(); g.moveTo(m.l, Y(0)); g.lineTo(W - m.r, Y(0)); g.stroke();
+  }
+  g.fillText("B₂", 6, m.t + 8); g.fillText("T*", W - m.r - 14, H - 8);
+  g.fillText(ymax.toFixed(2), 6, Y(ymax) + 4); g.fillText(ymin.toFixed(2), 6, Y(ymin) + 4);
+  g.fillText(xmin.toFixed(1), m.l - 6, H - m.b + 14); g.fillText(xmax.toFixed(1), W - m.r - 14, H - m.b + 14);
+
+  // numeric line
+  g.strokeStyle = "#2a6df4"; g.lineWidth = 2; g.beginPath();
+  rows.forEach((r, i) => { const x = X(r.T), y = Y(r.num); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+  g.stroke();
+  // exact dots
+  if (hasExact) {
+    g.fillStyle = "#e0533d";
+    rows.forEach(r => {
+      if (!Number.isFinite(r.exa)) return;
+      g.beginPath(); g.arc(X(r.T), Y(r.exa), 3, 0, 7); g.fill();
+    });
+  }
+  // legend
+  g.fillStyle = "#2a6df4"; g.fillText("— numeric (wasm)", W - 150, m.t + 6);
+  if (hasExact) { g.fillStyle = "#e0533d"; g.fillText("● exact", W - 150, m.t + 22); }
+}
+
+// ---- boot ----
+(async () => {
+  try {
+    const bytes = Uint8Array.from(atob(WASM_B64), c => c.charCodeAt(0));
+    const { instance } = await WebAssembly.instantiate(bytes, {});
+    ex = instance.exports;
+    $("go").disabled = false;
+    $("go").onclick = compute;
+    $("status").textContent = "ready.";
+    syncPreset();
+    compute();
+  } catch (e) {
+    $("status").innerHTML = `<span class="err">failed to load wasm: ${e.message}</span>`;
+  }
+})();
+</script>
+</body>
+</html>
