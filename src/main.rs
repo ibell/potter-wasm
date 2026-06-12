@@ -172,6 +172,64 @@ mod tests {
     }
 
     #[test]
+    fn hellmann_energy_matches_potter() {
+        // Validate the coded potentials against potter's exact reference energies
+        // (r in A; angles theta1, theta2, phi; V/kB in K).
+        use potter_poc::molecule::{co2_hellmann, n2_hellmann};
+        let d = std::f64::consts::PI / 180.0;
+        let n2 = n2_hellmann();
+        assert!((n2.energy(3.75, 90.0 * d, 90.0 * d, 0.0) - (-113.486)).abs() < 0.05);
+        assert!((n2.energy(5.00, 90.0 * d, 90.0 * d, 0.0) - (-27.097)).abs() < 0.05);
+        assert!((n2.energy(3.00, 90.0 * d, 90.0 * d, 90.0 * d) - 418.826).abs() < 0.5);
+        let co2 = co2_hellmann();
+        assert!((co2.energy(4.00, 0.0, 0.0, 0.0) - 35408.788).abs() < 2.0);
+        assert!((co2.energy(5.75, 0.0, 0.0, 0.0) - (-24.133)).abs() < 0.05);
+        assert!((co2.energy(6.00, 0.0, 0.0, 0.0) - (-12.275)).abs() < 0.05);
+    }
+
+    #[test]
+    fn molecule_single_site_matches_spherical() {
+        use potter_poc::b2_v;
+        use potter_poc::molecule::{Linear, Site};
+        // A 1-site molecule (no orientation dependence) must reproduce the
+        // spherical LJ B2 exactly: the 4-D orientational integral collapses.
+        let m = Linear {
+            sites: vec![Site { d: 0.0, eps: 1.0, sig: 1.0, q: 0.0 }],
+        };
+        let lj = |r: f64| {
+            let s6 = (1.0_f64 / r).powi(6);
+            4.0 * (s6 * s6 - s6)
+        };
+        for &t in &[1.5_f64, 2.0, 5.0] {
+            let (b2_cm3mol, _) = m.b2(t, 1e-7);
+            let b2_ang3 = b2_cm3mol / 0.602214; // back to sigma^3 (=Angstrom^3) units
+            let spherical = b2_v(&lj, t, 1e-10);
+            assert!(
+                (b2_ang3 - spherical).abs() / spherical.abs() < 5e-3,
+                "T*={t}: molecule {b2_ang3} vs spherical {spherical}"
+            );
+        }
+    }
+
+    #[test]
+    fn msmc_b3_matches_cubature() {
+        use potter_poc::b3_cubature_v;
+        use potter_poc::msmc::msmc_b3_v;
+        let p = pot();
+        // Mayer-sampling MC reproduces the deterministic B3 within statistical error.
+        for &t in &[1.5_f64, 2.0] {
+            let (cub, _) = b3_cubature_v(&|r| p.v(r), t, 1e-8);
+            let r = msmc_b3_v(&|r| p.v(r), t, 1.5, 4_000_000, 0xC0FFEE);
+            assert!(
+                (r.b3 - cub).abs() / cub.abs() < 0.02,
+                "T*={t}: MSMC {} +/- {} vs cubature {cub}",
+                r.b3,
+                r.stderr
+            );
+        }
+    }
+
+    #[test]
     fn b3_cubature_matches_nested_and_hardsphere() {
         use potter_poc::{b3_cubature_v, b3_v};
         let p = pot();

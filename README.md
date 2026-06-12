@@ -161,6 +161,14 @@ cargo run --release --bin aot_demo && node node/run-aot.mjs
   importance-sampling / Mayer-sampling Monte Carlo for B4 and beyond, rather than
   any uniform deterministic rule. That (and potter's Cuba/VEGAS path) is the real
   lever for the high-dimensional cases.
+- **Mayer-sampling Monte Carlo** (`src/msmc.rs`, Kofke & Singer) implements that
+  paradigm: it Metropolis-samples 6-D configurations ∝ |f₁₂f₁₃f₂₃| and references
+  to a hard sphere whose B₃ is known exactly — `B₃ = B₃ᴴˢ·⟨sign γ⟩/⟨γ₀/|γ|⟩`.
+  `cargo run --release --bin msmc_demo` shows it reproduces the cubature B₃ within
+  ~1σ at every temperature, and the estimate is **reference-independent** (the
+  built-in correctness check — three hard-sphere diameters agree). MC error is
+  ~1/√N *independent of dimension*, so the same sampler scales to B4 (9-D), where
+  deterministic cubature does not. This is the crossover the B3 benchmark predicts.
 - Temperature derivatives (dⁿB/dTⁿ) are out of scope here, but note they wrap
   *around* the potential: V(r) is T-independent, so a generic/arbitrary potential
   and exact derivatives do not conflict (`num-dual` would supply the autodiff).
