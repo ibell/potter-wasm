@@ -172,6 +172,21 @@ mod tests {
     }
 
     #[test]
+    fn n2_quantum_correction_matches_si() {
+        // First-order Wigner-Kirkwood quantum correction vs Hellmann SI column 3
+        // (B2 classical + quantum). N2: mu = m(N2)/2 = 14.0067, I = 8.473 amu A^2.
+        use potter_poc::molecule::n2_hellmann;
+        let n2 = n2_hellmann();
+        for &(t, si_clqc) in &[(90.0, -195.57), (200.0, -35.66), (500.0, 16.61)] {
+            let (qc, _) = n2.b2_quantum(t, 1e-4, 14.0067, 8.473);
+            assert!(
+                (qc - si_clqc).abs() < 0.1,
+                "T={t}: cl+qc {qc} vs SI {si_clqc}"
+            );
+        }
+    }
+
+    #[test]
     fn hellmann_energy_matches_potter() {
         // Validate the coded potentials against potter's exact reference energies
         // (r in A; angles theta1, theta2, phi; V/kB in K).

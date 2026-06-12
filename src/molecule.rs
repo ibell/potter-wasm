@@ -20,6 +20,34 @@ use std::f64::consts::PI;
 const COULOMB_K: f64 = 167101.0;
 /// 1 Angstrom^3 * N_A, in cm^3/mol.
 const ANG3_TO_CM3MOL: f64 = 0.602214;
+/// hbar^2 / (24 kB), expressed in amu*Angstrom^2*K, for the first-order Wigner-
+/// Kirkwood quantum correction: q = (Q_CONST/(mass[amu]*T^2)) exp(-U/T) * d2U,
+/// with U in K, second derivatives in K/Angstrom^2 (or K/rad^2). ~= 2.0214.
+const Q_CONST: f64 =
+    1.054571817e-34 * 1.054571817e-34 / (24.0 * 1.380649e-23) / (1.66053907e-27 * 1e-10 * 1e-10);
+
+/// Unit axis vector at polar angle `theta` from z and azimuth `phi`.
+#[inline]
+fn axis(theta: f64, phi: f64) -> [f64; 3] {
+    [theta.sin() * phi.cos(), theta.sin() * phi.sin(), theta.cos()]
+}
+#[inline]
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+#[inline]
+fn norm3(a: [f64; 3]) -> [f64; 3] {
+    let n = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+    [a[0] / n, a[1] / n, a[2] / n]
+}
+/// Two orthonormal axes perpendicular to unit vector `u` (a linear molecule's two
+/// principal rotation axes).
+#[inline]
+fn perp_axes(u: [f64; 3]) -> ([f64; 3], [f64; 3]) {
+    let t = if u[2].abs() < 0.9 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
+    let a = norm3(cross(u, t));
+    (a, cross(u, a))
+}
 
 #[derive(Clone, Copy)]
 pub struct Site {
@@ -201,15 +229,15 @@ impl RigidLinear {
         a * (-alpha * r).exp() - f6 * c6 / r.powi(6) - f8 * c8 / r.powi(8)
     }
 
-    /// Pair energy (K) for COM separation r, orientations (th1; th2, phi).
-    pub fn energy(&self, r: f64, th1: f64, th2: f64, phi: f64) -> f64 {
-        let u1 = [th1.sin(), 0.0, th1.cos()];
-        let u2 = [th2.sin() * phi.cos(), th2.sin() * phi.sin(), th2.cos()];
+    /// Pair energy (K) for arbitrary geometry: molecule 1 at the origin with axis
+    /// `u1`, molecule 2 with COM at `com2` and axis `u2` (both unit vectors).
+    #[inline]
+    fn energy_vec(&self, com2: [f64; 3], u1: [f64; 3], u2: [f64; 3]) -> f64 {
         let mut u = 0.0;
         for &(da, ta, qa) in &self.sites {
             let pa = [da * u1[0], da * u1[1], da * u1[2]];
             for &(db, tb, qb) in &self.sites {
-                let pb = [db * u2[0], db * u2[1], r + db * u2[2]];
+                let pb = [com2[0] + db * u2[0], com2[1] + db * u2[1], com2[2] + db * u2[2]];
                 let dx = pa[0] - pb[0];
                 let dy = pa[1] - pb[1];
                 let dz = pa[2] - pb[2];
@@ -221,6 +249,152 @@ impl RigidLinear {
             }
         }
         u
+    }
+
+    /// Pair energy (K) for COM separation r, orientations (th1; th2, phi).
+    pub fn energy(&self, r: f64, th1: f64, th2: f64, phi: f64) -> f64 {
+        self.energy_vec([0.0, 0.0, r], axis(th1, 0.0), axis(th2, phi))
+    }
+
+    /// Type-pair site-site potential and its first two R-derivatives (g, g', g'').
+    /// (The Coulomb part is added per-site by the caller.)
+    #[inline]
+    fn site_site_derivs(&self, ti: usize, tj: usize, r: f64) -> (f64, f64, f64) {
+        let [a, alpha, b, c6, c8] = self.table[ti * self.ntypes + tj];
+        let er = (-alpha * r).exp();
+        let (mut g, mut gp, mut gpp) = (a * er, -alpha * a * er, alpha * alpha * a * er);
+
+        let br = b * r;
+        let ebr = (-br).exp();
+        let (mut term, mut s6, mut s8) = (1.0, 0.0, 0.0);
+        for k in 0..=8 {
+            if k <= 6 {
+                s6 += term;
+            }
+            s8 += term;
+            term *= br / ((k + 1) as f64);
+        }
+        let f6 = 1.0 - ebr * s6;
+        let f8 = 1.0 - ebr * s8;
+        // f_2n'(R) = b e^{-bR}(bR)^{2n}/(2n)! ;  f_2n''(R) = b^2 e^{-bR}(bR)^{2n-1}(2n-bR)/(2n)!
+        let f6p = b * ebr * br.powi(6) / 720.0;
+        let f8p = b * ebr * br.powi(8) / 40320.0;
+        let f6pp = b * b * ebr * br.powi(5) * (6.0 - br) / 720.0;
+        let f8pp = b * b * ebr * br.powi(7) * (8.0 - br) / 40320.0;
+
+        let (r6, r7, r8, r9, r10) = (r.powi(6), r.powi(7), r.powi(8), r.powi(9), r.powi(10));
+        g += -c6 * f6 / r6 - c8 * f8 / r8;
+        gp += -c6 * (f6p / r6 - 6.0 * f6 / r7) - c8 * (f8p / r8 - 8.0 * f8 / r9);
+        gpp += -c6 * (f6pp / r6 - 12.0 * f6p / r7 + 42.0 * f6 / r8)
+            - c8 * (f8pp / r8 - 16.0 * f8p / r9 + 72.0 * f8 / r10);
+        (g, gp, gpp)
+    }
+
+    /// First-order quantum-correction term q12 (Hellmann Eq. 18-19), computed
+    /// ANALYTICALLY: the translational Laplacian (Coulomb part is identically zero
+    /// since 1/R is harmonic) and the rotational angular Laplacians of U, weighted
+    /// by 1/mu and 1/I and the Boltzmann factor. `u0` is U at the centre.
+    fn q_corr(
+        &self,
+        com2: [f64; 3],
+        u1: [f64; 3],
+        u2: [f64; 3],
+        u0: f64,
+        t: f64,
+        inv_mu: f64,
+        inv_i: f64,
+    ) -> f64 {
+        if !u0.is_finite() {
+            return 0.0;
+        }
+        let (a1, b1) = perp_axes(u1);
+        let (a2, b2) = perp_axes(u2);
+        let mut lap_t = 0.0;
+        let mut rot = 0.0;
+        // second derivative of R = |w| along a rotation whose w-velocity is dw,
+        // acceleration d2w: dR'' = (dw.dw + w.d2w)/R - (w.dw)^2/R^3
+        let d2r = |w: [f64; 3], dw: [f64; 3], d2w: [f64; 3], rr: f64, r2: f64, vp: f64, vpp: f64| {
+            let wdw = w[0] * dw[0] + w[1] * dw[1] + w[2] * dw[2];
+            let dwdw = dw[0] * dw[0] + dw[1] * dw[1] + dw[2] * dw[2];
+            let wd2w = w[0] * d2w[0] + w[1] * d2w[1] + w[2] * d2w[2];
+            let dr = wdw / rr;
+            let d2 = (dwdw + wd2w) / rr - wdw * wdw / (rr * r2);
+            vpp * dr * dr + vp * d2
+        };
+        for &(da, ta, qa) in &self.sites {
+            let pa = [da * u1[0], da * u1[1], da * u1[2]];
+            for &(db, tb, qb) in &self.sites {
+                let qpos = [com2[0] + db * u2[0], com2[1] + db * u2[1], com2[2] + db * u2[2]];
+                let w = [pa[0] - qpos[0], pa[1] - qpos[1], pa[2] - qpos[2]];
+                let r2 = w[0] * w[0] + w[1] * w[1] + w[2] * w[2];
+                let rr = r2.sqrt();
+                let (_g, gp, gpp) = self.site_site_derivs(ta, tb, rr);
+                let qq = qa * qb;
+                let vp = gp - qq / r2; // total v'  (Coulomb v' = -qq/R^2)
+                let vpp = gpp + 2.0 * qq / (rr * r2); // total v'' (Coulomb v'' = 2qq/R^3)
+                // translational Laplacian: type-pair only (Coulomb Laplacian = 0)
+                lap_t += gpp + 2.0 / rr * gp;
+                // rotational, molecule 1 (rotate site a about its COM): dw = ax x pa
+                let qrel = [db * u2[0], db * u2[1], db * u2[2]];
+                for ax in [a1, b1] {
+                    let dw = cross(ax, pa);
+                    let d2w = cross(ax, cross(ax, pa));
+                    rot += d2r(w, dw, d2w, rr, r2, vp, vpp);
+                }
+                // rotational, molecule 2 (rotate site b about COM2): dw = -(ax x qrel)
+                for ax in [a2, b2] {
+                    let dq = cross(ax, qrel);
+                    let d2q = cross(ax, cross(ax, qrel));
+                    let dw = [-dq[0], -dq[1], -dq[2]];
+                    let d2w = [-d2q[0], -d2q[1], -d2q[2]];
+                    rot += d2r(w, dw, d2w, rr, r2, vp, vpp);
+                }
+            }
+        }
+        Q_CONST / (t * t) * (-u0 / t).exp() * (inv_mu * lap_t + inv_i * rot)
+    }
+
+    /// B2(T) with the first-order Wigner-Kirkwood quantum correction (Hellmann
+    /// Eq. 22): integrate (Mayer - q12). `mu_amu` is the reduced mass of the
+    /// molecule pair, `i_amu_a2` the molecular moment of inertia (amu*Angstrom^2).
+    pub fn b2_quantum(&self, t: f64, reltol: f64, mu_amu: f64, i_amu_a2: f64) -> (f64, usize) {
+        let (inv_mu, inv_i) = (1.0 / mu_amu, 1.0 / i_amu_a2);
+        let rmin = 2.0;
+        let s_lo = rmin / (1.0 + rmin);
+        let integrand = |x: &[f64]| -> f64 {
+            let (s, th1, th2, phi) = (x[0], x[1], x[2], x[3]);
+            let om = 1.0 - s;
+            if om <= 0.0 {
+                return 0.0;
+            }
+            let r = s / om;
+            let jac = 1.0 / (om * om);
+            let (u1, u2) = (axis(th1, 0.0), axis(th2, phi));
+            let com2 = [0.0, 0.0, r];
+            let u = self.energy_vec(com2, u1, u2);
+            let (mayer, q) = if u.is_finite() {
+                ((-u / t).exp() - 1.0, self.q_corr(com2, u1, u2, u, t, inv_mu, inv_i))
+            } else {
+                (-1.0, 0.0)
+            };
+            let val = r * r * jac * th1.sin() * th2.sin() * (mayer - q);
+            if val.is_finite() {
+                val
+            } else {
+                0.0
+            }
+        };
+        let (i, _e, nev) = hcubature(
+            4,
+            &integrand,
+            &[s_lo, 0.0, 0.0, 0.0],
+            &[1.0, PI, PI, 2.0 * PI],
+            0.03,
+            reltol,
+            20_000_000,
+        );
+        let b2_ang3 = -0.25 * i + (2.0 * PI / 3.0) * rmin.powi(3);
+        (b2_ang3 * ANG3_TO_CM3MOL, nev)
     }
 
     pub fn b2(&self, t: f64, reltol: f64) -> (f64, usize) {
