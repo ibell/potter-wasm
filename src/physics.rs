@@ -221,6 +221,49 @@ pub fn b3(pot: &Potential, t: f64, tol: f64) -> f64 {
     b3_v(&|r| pot.v(r), t, tol)
 }
 
+/// B3 via genuine 3-D adaptive cubature (Genz-Malik hcubature). Same integral as
+/// `b3_v`, but the triangle domain is mapped to the unit cube [0,1]^3 — r1,r2 via
+/// r = s/(1-s), and r3 linearly across [|r1-r2|, r1+r2] — and integrated as one
+/// 3-D region tree instead of nested 1-D sweeps. Returns (B3, integrand evals).
+pub fn b3_cubature_v<V: Fn(f64) -> f64>(v: &V, t: f64, reltol: f64) -> (f64, usize) {
+    let f = |r: f64| mayer(v, t, r);
+    let integrand = |x: &[f64]| -> f64 {
+        let (s1, s2, u3) = (x[0], x[1], x[2]);
+        let (om1, om2) = (1.0 - s1, 1.0 - s2);
+        if om1 <= 0.0 || om2 <= 0.0 {
+            return 0.0;
+        }
+        let r1 = s1 / om1;
+        let r2 = s2 / om2;
+        let j1 = 1.0 / (om1 * om1);
+        let j2 = 1.0 / (om2 * om2);
+        let lo = (r1 - r2).abs();
+        let hi = r1 + r2;
+        let r3 = lo + (hi - lo) * u3;
+        let jr3 = hi - lo;
+        let val = r1 * r2 * r3 * f(r1) * f(r2) * f(r3) * j1 * j2 * jr3;
+        if val.is_finite() {
+            val
+        } else {
+            0.0
+        }
+    };
+    let (i, _e, nev) = crate::cubature::hcubature(
+        3,
+        &integrand,
+        &[0.0, 0.0, 0.0],
+        &[1.0, 1.0, 1.0],
+        1e-13,
+        reltol,
+        5_000_000,
+    );
+    (-(8.0 * PI * PI / 3.0) * i, nev)
+}
+
+pub fn b3_cubature(pot: &Potential, t: f64, reltol: f64) -> (f64, usize) {
+    b3_cubature_v(&|r| pot.v(r), t, reltol)
+}
+
 // --------------------- closed-form LJ B2 reference ---------------------
 
 /// Closed-form Lennard-Jones (12-6) second virial coefficient in reduced units

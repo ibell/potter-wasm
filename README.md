@@ -149,10 +149,18 @@ cargo run --release --bin aot_demo && node node/run-aot.mjs
 
 ## Notes / next steps
 
-- B3's nested-adaptive integrator is simple but its cost compounds across the 3
-  dimensions; a genuine multi-dimensional adaptive cubature (or Monte Carlo for
-  B4's 8–9-D integral) is the real path forward — that is exactly what potter's
-  hcubature/Cuba do.
+- **B3 has two integrators** (`src/physics.rs`): a simple nested-1-D adaptive
+  Simpson, and a genuine 3-D **Genz-Malik adaptive cubature** (`src/cubature.rs`,
+  pure Rust — degree-7 rule + embedded degree-5 error estimate + global region
+  heap, the `hcubature` scheme). They agree with each other and with the
+  hard-sphere exact anchor. `cargo run --release --bin b3bench` compares them:
+  on a *smooth* integrand the rule reaches 3e-13 in ~30k evals; on LJ B3 it is
+  ~3× faster than nesting at low T (where the repulsive wall makes the integrand
+  sharp) and comparable at high T. The residual difficulty is that thin
+  repulsive-wall layer — which is exactly why the field reaches for
+  importance-sampling / Mayer-sampling Monte Carlo for B4 and beyond, rather than
+  any uniform deterministic rule. That (and potter's Cuba/VEGAS path) is the real
+  lever for the high-dimensional cases.
 - Temperature derivatives (dⁿB/dTⁿ) are out of scope here, but note they wrap
   *around* the potential: V(r) is T-independent, so a generic/arbitrary potential
   and exact derivatives do not conflict (`num-dual` would supply the autodiff).

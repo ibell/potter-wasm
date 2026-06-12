@@ -3,6 +3,7 @@
 //! shipped as a self-contained WASM module that a host (node.js) calls into.
 
 pub mod aot;
+pub mod cubature;
 pub mod dsl;
 pub mod fastpot;
 pub mod integrate;
@@ -16,8 +17,8 @@ pub use jit::JitPotential;
 
 pub use fastpot::FastPotential;
 pub use physics::{
-    b2, b2_finegrid, b2_lj_series, b2_v, b2_v_grid, b3, b3_v, b3_v_grid, CsePotential, Potential,
-    LJ_BOYLE_TSTAR,
+    b2, b2_finegrid, b2_lj_series, b2_v, b2_v_grid, b3, b3_cubature, b3_cubature_v, b3_v, b3_v_grid,
+    CsePotential, Potential, LJ_BOYLE_TSTAR,
 };
 
 /// Compile a DSL potential string and compute B2 at temperature `t`.

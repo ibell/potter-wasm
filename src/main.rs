@@ -172,6 +172,23 @@ mod tests {
     }
 
     #[test]
+    fn b3_cubature_matches_nested_and_hardsphere() {
+        use potter_poc::{b3_cubature_v, b3_v};
+        let p = pot();
+        // Genz-Malik hcubature agrees with the (validated) nested-1D integrator.
+        for &t in &[1.0, 1.5, 2.0, 5.0] {
+            let nested = b3_v(&|r| p.v(r), t, 1e-9);
+            let (cub, _n) = b3_cubature_v(&|r| p.v(r), t, 1e-8);
+            assert!((nested - cub).abs() < 1e-5, "T*={t} nested={nested} cub={cub}");
+        }
+        // Hard-sphere exact anchor B3 = (5/8) B2^2 via cubature.
+        let (b3hs, _) = b3_cubature_v(&hard_sphere, 1.0, 1e-7);
+        let b2x = 2.0 * std::f64::consts::PI / 3.0;
+        let b3x = 0.625 * b2x * b2x;
+        assert!((b3hs - b3x).abs() / b3x < 1e-2, "B3_HS {b3hs} vs {b3x}");
+    }
+
+    #[test]
     fn b3_adaptive_matches_grid() {
         let p = pot();
         for &t in &[1.5, 2.0, 3.0] {
