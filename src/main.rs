@@ -466,6 +466,17 @@ mod tests {
     }
 
     #[test]
+    fn hcubature3_integrates_each_component_on_shared_grid() {
+        use potter_poc::cubature::hcubature3;
+        // f(x) = [1, x0, x0^2] over [0,1]^4 -> [1, 1/2, 1/3] (Genz-Malik is exact here).
+        let f = |x: &[f64]| [1.0, x[0], x[0] * x[0]];
+        let (v, _e, _n) = hcubature3(4, &f, &[0.0; 4], &[1.0; 4], 1e-10, 1e-10, 5_000_000);
+        assert!((v[0] - 1.0).abs() < 1e-9, "got {}", v[0]);
+        assert!((v[1] - 0.5).abs() < 1e-9, "got {}", v[1]);
+        assert!((v[2] - 1.0 / 3.0).abs() < 1e-9, "got {}", v[2]);
+    }
+
+    #[test]
     fn b2_derivs_from_dsl_matches_closure() {
         use potter_poc::{b2_and_derivs_v, b2_derivs_from_dsl};
         let lj = |r: f64| {
