@@ -323,6 +323,16 @@ mod tests {
     }
 
     #[test]
+    fn vector_adaptive_simpson_integrates_each_component() {
+        use potter_poc::integrate::adaptive_simpson3;
+        // f(x) = [1, x, x^2] over [0,1] -> [1, 1/2, 1/3], all on ONE shared grid.
+        let i = adaptive_simpson3(&|x| [1.0, x, x * x], 0.0, 1.0, 1e-12, 50);
+        assert!((i[0] - 1.0).abs() < 1e-10, "got {}", i[0]);
+        assert!((i[1] - 0.5).abs() < 1e-10, "got {}", i[1]);
+        assert!((i[2] - 1.0 / 3.0).abs() < 1e-10, "got {}", i[2]);
+    }
+
+    #[test]
     fn jit_handles_transcendentals() {
         // A potential using exp/sqrt exercises the libm-shim call path in the JIT.
         use potter_poc::JitPotential;

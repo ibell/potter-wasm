@@ -45,6 +45,79 @@ fn recur<F: Fn(f64) -> f64>(
         + recur(f, m, b, fm, fb, frm, right, 0.5 * tol, depth - 1)
 }
 
+/// Simpson estimate of a vector integrand over `[a, b]` from its three samples.
+#[inline]
+fn simpson3(a: f64, b: f64, fa: [f64; 3], fm: [f64; 3], fb: [f64; 3]) -> [f64; 3] {
+    let c = (b - a) / 6.0;
+    [
+        c * (fa[0] + 4.0 * fm[0] + fb[0]),
+        c * (fa[1] + 4.0 * fm[1] + fb[1]),
+        c * (fa[2] + 4.0 * fm[2] + fb[2]),
+    ]
+}
+
+/// Adaptive Simpson for a vector-valued integrand `f: x -> [f64; 3]`, refining on a
+/// SHARED subdivision until *every* component is resolved (mixed abs/rel test per
+/// component). Because all three components are evaluated at the same nodes, their
+/// quadrature errors are coherent — essential when the results are combined into a
+/// ratio such as n_eff(B2, B2', B2'').
+pub fn adaptive_simpson3<F: Fn(f64) -> [f64; 3]>(
+    f: &F,
+    a: f64,
+    b: f64,
+    tol: f64,
+    max_depth: u32,
+) -> [f64; 3] {
+    let m = 0.5 * (a + b);
+    let fa = f(a);
+    let fb = f(b);
+    let fm = f(m);
+    let whole = simpson3(a, b, fa, fm, fb);
+    recur3(f, a, b, fa, fb, fm, whole, tol, max_depth)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recur3<F: Fn(f64) -> [f64; 3]>(
+    f: &F,
+    a: f64,
+    b: f64,
+    fa: [f64; 3],
+    fb: [f64; 3],
+    fm: [f64; 3],
+    whole: [f64; 3],
+    tol: f64,
+    depth: u32,
+) -> [f64; 3] {
+    let m = 0.5 * (a + b);
+    let lm = 0.5 * (a + m);
+    let rm = 0.5 * (m + b);
+    let flm = f(lm);
+    let frm = f(rm);
+    let left = simpson3(a, m, fa, flm, fm);
+    let right = simpson3(m, b, fm, frm, fb);
+
+    let mut out = [0.0f64; 3];
+    let mut converged = true;
+    for k in 0..3 {
+        let lr = left[k] + right[k];
+        let delta = lr - whole[k];
+        out[k] = lr + delta / 15.0; // Richardson extrapolation, per component
+        // mixed absolute/relative tolerance so each component is resolved on the
+        // shared grid (the B2'' integrand peaks hardest at the wall and so votes
+        // on where to refine).
+        let scale = tol * (1.0 + lr.abs());
+        if delta.abs() > 15.0 * scale {
+            converged = false;
+        }
+    }
+    if depth == 0 || converged {
+        return out;
+    }
+    let l = recur3(f, a, m, fa, fm, flm, left, 0.5 * tol, depth - 1);
+    let r = recur3(f, m, b, fm, fb, frm, right, 0.5 * tol, depth - 1);
+    [l[0] + r[0], l[1] + r[1], l[2] + r[2]]
+}
+
 /// Fixed-grid composite Simpson over `[a, b]` with `n` panels (rounded up to even).
 /// Used only as an *independent* high-resolution reference to check the adaptive
 /// routine — not in the hot path.
