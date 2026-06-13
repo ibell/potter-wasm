@@ -30,6 +30,18 @@ pub fn b2_from_dsl(src: &str, eps: f64, sig: f64, t: f64, tol: f64) -> Result<f6
     Ok(b2(&pot, t, tol))
 }
 
+/// Compile a DSL potential string and compute B₂ with its first two T-derivatives.
+pub fn b2_derivs_from_dsl(
+    src: &str,
+    eps: f64,
+    sig: f64,
+    t: f64,
+    tol: f64,
+) -> Result<B2Derivs, String> {
+    let pot = Potential::compile(src, eps, sig)?;
+    Ok(b2_and_derivs(&pot, t, tol))
+}
+
 /// Compile a DSL potential string and compute B3 at temperature `t`.
 pub fn b3_from_dsl(src: &str, eps: f64, sig: f64, t: f64, tol: f64) -> Result<f64, String> {
     let pot = Potential::compile(src, eps, sig)?;
@@ -40,7 +52,7 @@ pub fn b3_from_dsl(src: &str, eps: f64, sig: f64, t: f64, tol: f64) -> Result<f6
 /// linear memory via `poc_alloc`, then calls `poc_b2` / `poc_b3`.
 #[cfg(target_arch = "wasm32")]
 mod wasm_exports {
-    use super::{b2_from_dsl, b3_from_dsl};
+    use super::{b2_derivs_from_dsl, b2_from_dsl, b3_from_dsl};
     use std::alloc::{alloc, dealloc, Layout};
 
     #[no_mangle]
@@ -80,6 +92,44 @@ mod wasm_exports {
     pub extern "C" fn poc_b3(ptr: *const u8, len: usize, eps: f64, sig: f64, t: f64) -> f64 {
         match read_dsl(ptr, len) {
             Some(src) => b3_from_dsl(src, eps, sig, t, 1e-7).unwrap_or(f64::NAN),
+            None => f64::NAN,
+        }
+    }
+
+    /// Parse the DSL at [ptr,len) and write `[B2, dB2/dT, d2B2/dT2, n_eff]` (4 f64)
+    /// into the caller-provided `out` array. All NaN on parse/eval error. One
+    /// integration pass — avoids recomputing B2 three times.
+    #[no_mangle]
+    pub extern "C" fn poc_b2_derivs(
+        ptr: *const u8,
+        len: usize,
+        eps: f64,
+        sig: f64,
+        t: f64,
+        out: *mut f64,
+    ) {
+        let vals = match read_dsl(ptr, len) {
+            Some(src) => match b2_derivs_from_dsl(src, eps, sig, t, 1e-12) {
+                Ok(d) => [d.b2, d.db2_dt, d.d2b2_dt2, d.neff(t)],
+                Err(_) => [f64::NAN; 4],
+            },
+            None => [f64::NAN; 4],
+        };
+        unsafe {
+            for (k, v) in vals.iter().enumerate() {
+                *out.add(k) = *v;
+            }
+        }
+    }
+
+    /// Parse the DSL at [ptr,len) and return the effective repulsive exponent
+    /// n_eff(T). NaN on error.
+    #[no_mangle]
+    pub extern "C" fn poc_neff(ptr: *const u8, len: usize, eps: f64, sig: f64, t: f64) -> f64 {
+        match read_dsl(ptr, len) {
+            Some(src) => b2_derivs_from_dsl(src, eps, sig, t, 1e-12)
+                .map(|d| d.neff(t))
+                .unwrap_or(f64::NAN),
             None => f64::NAN,
         }
     }

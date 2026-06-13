@@ -433,4 +433,21 @@ mod tests {
         let ne2 = b2_lj_series_derivs(1e4, 60).neff(1e4);
         assert!((ne2 - 12.0).abs() < 0.3, "n_eff(1e4)={ne2}");
     }
+
+    #[test]
+    fn b2_derivs_from_dsl_matches_closure() {
+        use potter_poc::{b2_and_derivs_v, b2_derivs_from_dsl};
+        let lj = |r: f64| {
+            let s6 = (1.0_f64 / r).powi(6);
+            4.0 * (s6 * s6 - s6)
+        };
+        let t = 2.0;
+        let viadsl =
+            b2_derivs_from_dsl("4*eps*((sig/r)**12 - (sig/r)**6)", 1.0, 1.0, t, 1e-12).unwrap();
+        let viaclosure = b2_and_derivs_v(&lj, t, 1e-12);
+        assert!((viadsl.b2 - viaclosure.b2).abs() < 1e-9);
+        assert!((viadsl.db2_dt - viaclosure.db2_dt).abs() < 1e-9);
+        assert!((viadsl.d2b2_dt2 - viaclosure.d2b2_dt2).abs() < 1e-9);
+        assert!((viadsl.neff(t) - viaclosure.neff(t)).abs() < 1e-9);
+    }
 }
