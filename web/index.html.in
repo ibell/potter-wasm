@@ -52,12 +52,14 @@
         <select id="preset">
           <option value="lj">Lennard-Jones (12-6)</option>
           <option value="mie">Mie  (n–m)</option>
+          <option value="stockmayer">Stockmayer (12-6-3)</option>
           <option value="inv">Inverse power  ε(σ/r)ⁿ</option>
           <option value="custom">Custom…</option>
         </select>
       </label>
       <label id="nwrap" hidden>n <input id="nexp" type="number" value="12" min="4" step="1" /></label>
       <label id="mwrap" hidden>m <input id="mexp" type="number" value="6" min="4" step="1" /></label>
+      <label id="mu2wrap" hidden>(μ*)² <input id="mu2" type="number" value="2" min="0" step="0.5" /></label>
       <label>ε <input id="eps" type="number" value="1" step="0.1" /></label>
       <label>σ <input id="sig" type="number" value="1" step="0.1" /></label>
     </div>
@@ -189,14 +191,17 @@ function mieExact(u, eps, sig3, T, n, m) {
 const $ = (id) => document.getElementById(id);
 const presetSel = $("preset"), dslEl = $("dsl");
 const nwrap = $("nwrap"), nexp = $("nexp"), mwrap = $("mwrap"), mexp = $("mexp");
+const mu2wrap = $("mu2wrap"), mu2el = $("mu2");
 
 // Mie (n–m) normalization constant: u = C ε [(σ/r)^n − (σ/r)^m], LJ(12-6) -> C=4.
 const mieC = (n, m) => (n / (n - m)) * (n / m) ** (m / (n - m));
 
+const STOCKMAYER_FORMULA = "4*eps*((sig/r)**12 - (sig/r)**6) - eps*mu2*(sig/r)**3*[2cosθ₁cosθ₂ - sinθ₁sinθ₂cosφ]";
 function syncPreset() {
   const p = presetSel.value;
   nwrap.hidden = !(p === "inv" || p === "mie");
   mwrap.hidden = p !== "mie";
+  mu2wrap.hidden = p !== "stockmayer";
   if (p === "lj") {
     dslEl.value = "4*eps*((sig/r)**12 - (sig/r)**6)"; dslEl.readOnly = true;
   } else if (p === "inv") {
@@ -204,7 +209,12 @@ function syncPreset() {
   } else if (p === "mie") {
     const n = parseInt(nexp.value) || 12, m = parseInt(mexp.value) || 6;
     dslEl.value = `${mieC(n, m)}*eps*((sig/r)**${n} - (sig/r)**${m})`; dslEl.readOnly = true;
+  } else if (p === "stockmayer") {
+    dslEl.value = STOCKMAYER_FORMULA;
+    dslEl.readOnly = true; // informational only — computed by 4-D cubature, not the DSL
   } else {
+    // leaving Stockmayer for Custom: its formula is not valid DSL, so seed a default
+    if (dslEl.value === STOCKMAYER_FORMULA) dslEl.value = "4*eps*((sig/r)**12 - (sig/r)**6)";
     dslEl.readOnly = false;
   }
 }
@@ -217,6 +227,7 @@ nexp.oninput = () => { if (presetSel.value === "inv" || presetSel.value === "mie
 mexp.oninput = () => { if (presetSel.value === "mie") syncPreset(); };
 nexp.onchange = () => { if (presetSel.value === "inv" || presetSel.value === "mie") { syncPreset(); recompute(); } };
 mexp.onchange = () => { if (presetSel.value === "mie") { syncPreset(); recompute(); } };
+mu2el.onchange = () => { if (presetSel.value === "stockmayer") { syncPreset(); recompute(); } };
 
 // Exact closed-form { b2, db2, d2b2, neff } for a preset, or null for custom.
 function exactFor(T, eps, sig) {
@@ -244,7 +255,7 @@ function exactFor(T, eps, sig) {
 // just the Mie attractive exponent, not a limit of n_eff).
 function repExponent() {
   const p = presetSel.value;
-  if (p === "lj") return 12;
+  if (p === "lj" || p === "stockmayer") return 12; // LJ repulsive core -> high-T limit 12
   if (p === "mie" || p === "inv") return parseInt(nexp.value) || 12;
   return NaN;
 }
@@ -312,10 +323,15 @@ async function compute() {
   while (i < Ts.length) {
     if (gen !== runGen) return; // a newer run started — abandon this one
     const sliceStart = performance.now();
-    do {
-      rows.push(computeRow(preset, pot, Ts[i], eps, sig));
-      i++;
-    } while (i < Ts.length && performance.now() - sliceStart < 16);
+    try {
+      do {
+        rows.push(computeRow(preset, pot, Ts[i], eps, sig));
+        i++;
+      } while (i < Ts.length && performance.now() - sliceStart < 16);
+    } catch (e) {
+      $("status").innerHTML = `<span class="err">✗ ${e.message}</span>`;
+      return;
+    }
 
     const hasExact = rows.some(r => r.ex);
     lastRows = rows.slice();
