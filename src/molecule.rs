@@ -12,7 +12,8 @@
 //! evaluated with the Genz-Malik `hcubature` from this crate. Real units in;
 //! B2 out in cm^3/mol. Validated by the exact single-site limit (-> spherical B2).
 
-use crate::cubature::hcubature;
+use crate::cubature::{hcubature, hcubature3};
+use crate::physics::B2Derivs;
 use std::collections::HashMap;
 use std::f64::consts::PI;
 
@@ -518,5 +519,52 @@ impl Stockmayer {
         let lj = 4.0 * self.eps * (sr6 * sr6 - sr6);
         let ang = 2.0 * th1.cos() * th2.cos() - th1.sin() * th2.sin() * phi.cos();
         lj - self.eps * self.mu2 * sr3 * ang
+    }
+
+    /// Reduced B₂ and its first two T*-derivatives (σ³ units; ε=σ=1 expected for the
+    /// web). 4-D orientational average via `hcubature3`, differentiating e^{-U/T}
+    /// analytically (U is T-independent). Returns (B2Derivs, integrand evals).
+    pub fn b2_and_derivs(&self, t: f64, reltol: f64) -> (B2Derivs, usize) {
+        let integrand = |x: &[f64]| -> [f64; 3] {
+            let (s, th1, th2, phi) = (x[0], x[1], x[2], x[3]);
+            let om = 1.0 - s;
+            if om <= 0.0 {
+                return [0.0; 3];
+            }
+            let r = s / om;
+            let w = r * r / (om * om) * th1.sin() * th2.sin(); // r^2 * Jacobian * angular
+            let u = self.energy(r, th1, th2, phi);
+            let (f0, f1, f2) = if u.is_finite() {
+                let e = (-u / t).exp();
+                let t2 = t * t;
+                (e - 1.0, e * u / t2, e * (u * u / (t2 * t2) - 2.0 * u / (t2 * t)))
+            } else {
+                (-1.0, 0.0, 0.0)
+            };
+            let mut out = [f0 * w, f1 * w, f2 * w];
+            for v in out.iter_mut() {
+                if !v.is_finite() {
+                    *v = 0.0;
+                }
+            }
+            out
+        };
+        let (i, _e, nev) = hcubature3(
+            4,
+            &integrand,
+            &[0.0, 0.0, 0.0, 0.0],
+            &[1.0, PI, PI, 2.0 * PI],
+            1e-3,
+            reltol,
+            5_000_000,
+        );
+        // Same -0.25 orientational normalization as `b2_orientational`; reduced units
+        // (σ³), so NO ANG3_TO_CM3MOL conversion here.
+        let d = B2Derivs {
+            b2: -0.25 * i[0],
+            db2_dt: -0.25 * i[1],
+            d2b2_dt2: -0.25 * i[2],
+        };
+        (d, nev)
     }
 }

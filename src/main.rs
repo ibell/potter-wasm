@@ -477,6 +477,46 @@ mod tests {
     }
 
     #[test]
+    fn stockmayer_zero_dipole_matches_lj() {
+        use potter_poc::b2_and_derivs_v;
+        use potter_poc::molecule::Stockmayer;
+        let lj = |r: f64| {
+            let s6 = (1.0_f64 / r).powi(6);
+            4.0 * (s6 * s6 - s6)
+        };
+        let sm = Stockmayer { eps: 1.0, sig: 1.0, mu2: 0.0 };
+        for &t in &[2.0_f64, 5.0] {
+            let (d, _n) = sm.b2_and_derivs(t, 1e-4);
+            let r = b2_and_derivs_v(&lj, t, 1e-11);
+            assert!((d.b2 - r.b2).abs() / r.b2.abs() < 5e-3, "B2 T*={t}: {} vs {}", d.b2, r.b2);
+            assert!((d.db2_dt - r.db2_dt).abs() / r.db2_dt.abs() < 5e-3, "B2' T*={t}");
+            assert!((d.d2b2_dt2 - r.d2b2_dt2).abs() / r.d2b2_dt2.abs() < 5e-3, "B2'' T*={t}");
+            assert!((d.neff(t) - r.neff(t)).abs() < 1e-2, "neff T*={t}: {} vs {}", d.neff(t), r.neff(t));
+        }
+    }
+
+    #[test]
+    fn stockmayer_dipole_lowers_neff_and_b2() {
+        use potter_poc::molecule::Stockmayer;
+        // At a fixed T*, a stronger dipole adds attraction: B2 more negative, n_eff lower.
+        let t = 3.0_f64;
+        let mut prev_b2 = f64::INFINITY;
+        let mut prev_neff = f64::INFINITY;
+        for &mu2 in &[0.0_f64, 2.0, 4.0] {
+            let sm = Stockmayer { eps: 1.0, sig: 1.0, mu2 };
+            let (d, _n) = sm.b2_and_derivs(t, 1e-4);
+            let ne = d.neff(t);
+            assert!(d.b2 < prev_b2, "B2 not decreasing at mu2={mu2}: {} !< {}", d.b2, prev_b2);
+            assert!(ne < prev_neff, "n_eff not decreasing at mu2={mu2}: {} !< {}", ne, prev_neff);
+            prev_b2 = d.b2;
+            prev_neff = ne;
+        }
+        // mu2=0 must equal the LJ n_eff at T*=3 (~9.08).
+        let sm0 = Stockmayer { eps: 1.0, sig: 1.0, mu2: 0.0 };
+        assert!((sm0.b2_and_derivs(t, 1e-4).0.neff(t) - 9.077).abs() < 0.1);
+    }
+
+    #[test]
     fn stockmayer_energy_lj_plus_dipole() {
         use potter_poc::molecule::Stockmayer;
         // (μ*)²=0 -> pure LJ, angle-independent.
