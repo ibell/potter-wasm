@@ -532,6 +532,17 @@ mod tests {
     }
 
     #[test]
+    fn stockmayer_b2_derivs_reduced_matches_molecule() {
+        use potter_poc::stockmayer_b2_derivs;
+        use potter_poc::molecule::Stockmayer;
+        let d = stockmayer_b2_derivs(3.0, 2.0, 1e-4);
+        let (m, _n) = Stockmayer { eps: 1.0, sig: 1.0, mu2: 2.0 }.b2_and_derivs(3.0, 1e-4);
+        assert!((d.b2 - m.b2).abs() < 1e-12);
+        assert!((d.db2_dt - m.db2_dt).abs() < 1e-12);
+        assert!((d.d2b2_dt2 - m.d2b2_dt2).abs() < 1e-12);
+    }
+
+    #[test]
     fn b2_derivs_from_dsl_matches_closure() {
         use potter_poc::{b2_and_derivs_v, b2_derivs_from_dsl};
         let lj = |r: f64| {

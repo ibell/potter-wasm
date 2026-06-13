@@ -42,6 +42,13 @@ pub fn b2_derivs_from_dsl(
     Ok(b2_and_derivs(&pot, t, tol))
 }
 
+/// Reduced Stockmayer (ε=σ=1) B₂ and its first two T*-derivatives at reduced
+/// temperature `tstar` and dipole strength `mu2 = (μ*)²`.
+pub fn stockmayer_b2_derivs(tstar: f64, mu2: f64, reltol: f64) -> B2Derivs {
+    let sm = crate::molecule::Stockmayer { eps: 1.0, sig: 1.0, mu2 };
+    sm.b2_and_derivs(tstar, reltol).0
+}
+
 /// Compile a DSL potential string and compute B3 at temperature `t`.
 pub fn b3_from_dsl(src: &str, eps: f64, sig: f64, t: f64, tol: f64) -> Result<f64, String> {
     let pot = Potential::compile(src, eps, sig)?;
@@ -52,7 +59,7 @@ pub fn b3_from_dsl(src: &str, eps: f64, sig: f64, t: f64, tol: f64) -> Result<f6
 /// linear memory via `poc_alloc`, then calls `poc_b2` / `poc_b3`.
 #[cfg(target_arch = "wasm32")]
 mod wasm_exports {
-    use super::{b2_derivs_from_dsl, b2_from_dsl, b3_from_dsl};
+    use super::{b2_derivs_from_dsl, b2_from_dsl, b3_from_dsl, stockmayer_b2_derivs};
     use std::alloc::{alloc, dealloc, Layout};
 
     #[no_mangle]
@@ -118,6 +125,19 @@ mod wasm_exports {
         unsafe {
             for (k, v) in vals.iter().enumerate() {
                 *out.add(k) = *v;
+            }
+        }
+    }
+
+    /// Reduced Stockmayer: write [B2*, dB2*/dT*, d2B2*/dT*2, n_eff] (4 f64) into the
+    /// caller `out` array. Uses unaligned writes so `out` need not be 8-byte aligned.
+    #[no_mangle]
+    pub extern "C" fn poc_stockmayer(tstar: f64, mu2: f64, reltol: f64, out: *mut f64) {
+        let d = stockmayer_b2_derivs(tstar, mu2, reltol);
+        let vals = [d.b2, d.db2_dt, d.d2b2_dt2, d.neff(tstar)];
+        unsafe {
+            for (k, v) in vals.iter().enumerate() {
+                out.add(k).write_unaligned(*v);
             }
         }
     }
