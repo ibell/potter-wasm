@@ -362,3 +362,40 @@ pub fn b2_lj_series(tstar: f64, nterms: usize) -> f64 {
     }
     (2.0 * PI / 3.0) * sum
 }
+
+/// Closed-form LJ (12-6) reduced B₂ **and its first two T*-derivatives**, by
+/// differentiating the HCB Γ-series term-by-term — the analytic oracle for the
+/// integrated derivatives. Each term is `coeff_j · T*^{-q_j}` with
+/// `q_j = (2j+1)/4`, so `d/dT*` brings down `-q_j`, and `d²/dT*²` brings
+/// `q_j (q_j+1)`. (σ = ε = 1.)
+pub fn b2_lj_series_derivs(tstar: f64, nterms: usize) -> B2Derivs {
+    let mut factorial = 1.0f64;
+    let (mut s0, mut s1, mut s2) = (0.0f64, 0.0f64, 0.0f64);
+    for j in 0..nterms {
+        let jf = j as f64;
+        if j > 0 {
+            factorial *= jf;
+        }
+        let p = (2.0 * jf + 1.0) / 2.0;
+        let coeff = -(2.0f64.powf(p) / (4.0 * factorial)) * libm::tgamma((2.0 * jf - 1.0) / 4.0);
+        let q = (2.0 * jf + 1.0) / 4.0;
+        let t0 = coeff * tstar.powf(-q);
+        let t1 = coeff * (-q) * tstar.powf(-q - 1.0);
+        let t2 = coeff * q * (q + 1.0) * tstar.powf(-q - 2.0);
+        if t0.is_finite() {
+            s0 += t0;
+        }
+        if t1.is_finite() {
+            s1 += t1;
+        }
+        if t2.is_finite() {
+            s2 += t2;
+        }
+    }
+    let c = 2.0 * PI / 3.0;
+    B2Derivs {
+        b2: c * s0,
+        db2_dt: c * s1,
+        d2b2_dt2: c * s2,
+    }
+}

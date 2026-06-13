@@ -391,4 +391,46 @@ mod tests {
         // (c) n_eff is finite
         assert!(d.neff(t).is_finite(), "neff not finite: {}", d.neff(t));
     }
+
+    #[test]
+    fn neff_equals_n_for_inverse_power() {
+        use potter_poc::{b2_and_derivs, Potential};
+        // For u = eps*(sig/r)^n, n_eff(T) == n exactly, at every T.
+        for &n in &[6, 9, 12, 18] {
+            let src = format!("eps*(sig/r)**{n}");
+            let p = Potential::compile(&src, 1.0, 1.0).unwrap();
+            for &t in &[1.0_f64, 2.0, 5.0] {
+                let d = b2_and_derivs(&p, t, 1e-12);
+                let ne = d.neff(t);
+                assert!((ne - n as f64).abs() < 1e-3, "n={n} T*={t}: n_eff={ne}");
+            }
+        }
+    }
+
+    #[test]
+    fn lj_derivs_match_hcb_series() {
+        use potter_poc::{b2_and_derivs_v, b2_lj_series_derivs};
+        let lj = |r: f64| {
+            let s6 = (1.0_f64 / r).powi(6);
+            4.0 * (s6 * s6 - s6)
+        };
+        for &t in &[2.0_f64, 3.0, 5.0] {
+            let num = b2_and_derivs_v(&lj, t, 1e-12);
+            let ser = b2_lj_series_derivs(t, 60);
+            assert!(((num.b2 - ser.b2) / ser.b2).abs() < 1e-4, "B2 T*={t}");
+            assert!(((num.db2_dt - ser.db2_dt) / ser.db2_dt).abs() < 1e-4, "B2' T*={t}");
+            assert!(((num.d2b2_dt2 - ser.d2b2_dt2) / ser.d2b2_dt2).abs() < 1e-3, "B2'' T*={t}");
+            assert!((num.neff(t) - ser.neff(t)).abs() < 1e-3, "neff T*={t}");
+        }
+    }
+
+    #[test]
+    fn lj_neff_high_temperature_limit_is_twelve() {
+        use potter_poc::b2_lj_series_derivs;
+        // Leading HCB term ~ T*^{-1/4} = T^{-3/n} with n = 12 -> n_eff -> 12.
+        let ne = b2_lj_series_derivs(1e6, 60).neff(1e6);
+        assert!((ne - 12.0).abs() < 0.05, "n_eff(1e6)={ne}");
+        let ne2 = b2_lj_series_derivs(1e4, 60).neff(1e4);
+        assert!((ne2 - 12.0).abs() < 0.3, "n_eff(1e4)={ne2}");
+    }
 }
