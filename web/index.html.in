@@ -38,7 +38,10 @@
   <h1>Second virial coefficient B₂(T) — in the browser</h1>
   <p class="sub">Type a pair potential V(r). It is compiled to a WebAssembly module
      <em>in your browser</em> (AOT) and run natively to integrate
-     B₂ = −2π ∫₀<sup>∞</sup> (e<sup>−V/T</sup>−1) r² dr. Reduced units.</p>
+     B₂ = −2π ∫₀<sup>∞</sup> (e<sup>−V/T</sup>−1) r² dr. Because V(r) is
+     T-independent, the same pass also returns the first two T-derivatives
+     (analytically) and the effective repulsive exponent
+     n_eff = −3(B₂+T·B₂′)/(2T·B₂′+T²·B₂″). Reduced units.</p>
 
   <fieldset>
     <legend>potential</legend>
@@ -76,6 +79,8 @@
     <div><div id="tablewrap"></div></div>
   </div>
 
+  <canvas id="plotn" width="860" height="300"></canvas>
+
 <script>
 const WASM_B64 = "__WASM_B64__";
 
@@ -101,27 +106,65 @@ function makePotential(dsl) {
   const inst = new WebAssembly.Instance(new WebAssembly.Module(bytes), ENV);
   return { fn: inst.exports.potential, size: bytes.length };
 }
-function b2(fn, eps, sig, T, n = 40000) {
-  // composite Simpson over s in [0,1), r = s/(1-s)
-  let sum = 0;
+function b2derivs(fn, eps, sig, T, n = 40000) {
+  // one-pass composite Simpson over s in [0,1), r = s/(1-s), of the three
+  // integrands for [B2, dB2/dT, d2B2/dT2] on the SAME grid. V(r) is
+  // T-independent, so the Boltzmann-factor derivatives are exact:
+  //   B2'  integrand = e^{-V/T} (V/T^2) r^2
+  //   B2'' integrand = e^{-V/T} (V^2/T^4 - 2V/T^3) r^2
+  let s0 = 0, s1 = 0, s2 = 0;
   for (let i = 0; i <= n; i++) {
     const s = i / n, om = 1 - s;
-    let val = 0;
+    let f0 = 0, f1 = 0, f2 = 0;
     if (om > 0) {
-      const r = s / om, jac = 1 / (om * om);
+      const r = s / om, w = (r * r) / (om * om); // r^2 * Jacobian
       const V = fn(r, eps, sig);
-      const m = Number.isFinite(V) ? Math.exp(-V / T) - 1 : -1;
-      val = m * r * r * jac;
-      if (!Number.isFinite(val)) val = 0;
+      if (Number.isFinite(V)) {
+        const e = Math.exp(-V / T), t2 = T * T;
+        f0 = (e - 1) * w;
+        f1 = (e * V / t2) * w;
+        f2 = (e * (V * V / (t2 * t2) - 2 * V / (t2 * T))) * w;
+      } else {
+        f0 = -w; // repulsive core: e^{-V/T} -> 0, derivatives -> 0
+      }
+      if (!Number.isFinite(f0)) f0 = 0;
+      if (!Number.isFinite(f1)) f1 = 0;
+      if (!Number.isFinite(f2)) f2 = 0;
     }
-    const w = i === 0 || i === n ? 1 : i % 2 === 1 ? 4 : 2;
-    sum += w * val;
+    const wt = i === 0 || i === n ? 1 : i % 2 === 1 ? 4 : 2;
+    s0 += wt * f0; s1 += wt * f1; s2 += wt * f2;
   }
-  return (-2 * Math.PI * sum) / (3 * n);
+  const k = (-2 * Math.PI) / (3 * n);
+  const b2 = k * s0, db2 = k * s1, d2b2 = k * s2;
+  return { b2, db2, d2b2, neff: neffFrom(b2, db2, d2b2, T) };
 }
+// n_eff from B2 and its first two T-derivatives (potter's formula).
+const neffFrom = (b2, db2, d2b2, T) =>
+  (-3 * (b2 + T * db2)) / (2 * T * db2 + T * T * d2b2);
+
 const b2LjExact = (T, eps, sig) => sig ** 3 * ex.poc_b2_lj_series(T / eps, 80);
 const b2InvExact = (T, eps, sig, n) =>
   n > 3 ? ((2 * Math.PI) / 3) * sig ** 3 * ex.poc_tgamma(1 - 3 / n) * (T / eps) ** (-3 / n) : NaN;
+
+// exact LJ (12-6) reduced B2 and its first two T*-derivatives (HCB series,
+// differentiated term-by-term) -> exact n_eff. Mirrors Rust b2_lj_series_derivs.
+function ljNeffExact(tstar, nterms = 80) {
+  let factorial = 1, s0 = 0, s1 = 0, s2 = 0;
+  for (let j = 0; j < nterms; j++) {
+    if (j > 0) factorial *= j;
+    const p = (2 * j + 1) / 2;
+    const coeff = -((2 ** p) / (4 * factorial)) * ex.poc_tgamma((2 * j - 1) / 4);
+    const q = (2 * j + 1) / 4;
+    const t0 = coeff * tstar ** (-q);
+    const t1 = coeff * (-q) * tstar ** (-q - 1);
+    const t2 = coeff * q * (q + 1) * tstar ** (-q - 2);
+    if (Number.isFinite(t0)) s0 += t0;
+    if (Number.isFinite(t1)) s1 += t1;
+    if (Number.isFinite(t2)) s2 += t2;
+  }
+  // n_eff is dimensionless / scale-invariant, so evaluate on the reduced series.
+  return neffFrom(s0, s1, s2, tstar);
+}
 
 // ---- UI ----
 const $ = (id) => document.getElementById(id);
@@ -144,6 +187,22 @@ function exactFor(T, eps, sig) {
   return NaN; // custom: no closed form
 }
 
+// exact n_eff(T) for the presets (scale-invariant: depends only on T/eps).
+function neffExactFor(T, eps) {
+  const p = presetSel.value;
+  if (p === "lj") return ljNeffExact(T / eps);
+  if (p === "inv") return parseInt(nexp.value) || 12; // n_eff == n exactly
+  return NaN; // custom: no closed form
+}
+
+// the repulsive exponent the high-T limit should approach, for a reference line.
+function repExponent() {
+  const p = presetSel.value;
+  if (p === "lj") return 12;
+  if (p === "inv") return parseInt(nexp.value) || 12;
+  return NaN;
+}
+
 function compute() {
   const eps = parseFloat($("eps").value), sig = parseFloat($("sig").value);
   const tmin = parseFloat($("tmin").value), tmax = parseFloat($("tmax").value);
@@ -156,30 +215,36 @@ function compute() {
   let hasExact = false;
   for (let i = 0; i < np; i++) {
     const T = tmin + (tmax - tmin) * (i / (np - 1));
-    const num = b2(pot.fn, eps, sig, T);
+    const d = b2derivs(pot.fn, eps, sig, T);
     const exa = exactFor(T, eps, sig);
+    const neffEx = neffExactFor(T, eps);
     if (Number.isFinite(exa)) hasExact = true;
-    rows.push({ T, num, exa });
+    rows.push({ T, num: d.b2, db2: d.db2, d2b2: d.d2b2, neff: d.neff, exa, neffEx });
   }
   $("status").innerHTML =
     `✓ compiled <code>${dslEl.value.replace(/</g,"&lt;")}</code> to a ${pot.size}-byte wasm module, ` +
-    `run natively for ${np} temperatures.` +
+    `run natively for ${np} temperatures — B₂, its first two T-derivatives, and n_eff.` +
     (hasExact ? "" : " <span class=note>(no closed form for a custom potential)</span>");
   renderTable(rows, hasExact);
   renderPlot(rows, hasExact);
+  renderNeffPlot(rows, hasExact);
 }
 
 function renderTable(rows, hasExact) {
-  let h = "<table><tr><th>T*</th><th>B₂ (wasm)</th>" +
-          (hasExact ? "<th>B₂ (exact)</th><th>|Δ|</th>" : "") + "</tr>";
+  let h = "<table><tr><th>T*</th><th>B₂</th><th>dB₂/dT</th><th>d²B₂/dT²</th>" +
+          "<th>n_eff</th>" + (hasExact ? "<th>n_eff*</th>" : "") + "</tr>";
   for (const r of rows) {
-    h += `<tr><td>${r.T.toFixed(3)}</td><td>${r.num.toFixed(5)}</td>`;
+    h += `<tr><td>${r.T.toFixed(3)}</td><td>${r.num.toFixed(4)}</td>` +
+         `<td>${r.db2.toFixed(4)}</td><td>${r.d2b2.toFixed(4)}</td>` +
+         `<td>${Number.isFinite(r.neff) ? r.neff.toFixed(3) : "—"}</td>`;
     if (hasExact)
-      h += `<td>${Number.isFinite(r.exa) ? r.exa.toFixed(5) : "—"}</td>` +
-           `<td>${Number.isFinite(r.exa) ? Math.abs(r.num - r.exa).toExponential(1) : "—"}</td>`;
+      h += `<td>${Number.isFinite(r.neffEx) ? r.neffEx.toFixed(3) : "—"}</td>`;
     h += "</tr>";
   }
-  $("tablewrap").innerHTML = h + "</table>";
+  $("tablewrap").innerHTML = h + "</table>" +
+    (hasExact
+      ? "<div class=note>n_eff* = exact (flat at n for inverse-power; → 12 for LJ at high T).</div>"
+      : "");
 }
 
 function renderPlot(rows, hasExact) {
@@ -220,6 +285,68 @@ function renderPlot(rows, hasExact) {
   // legend
   g.fillStyle = "#2a6df4"; g.fillText("— numeric (wasm)", W - 150, m.t + 6);
   if (hasExact) { g.fillStyle = "#e0533d"; g.fillText("● exact", W - 150, m.t + 22); }
+}
+
+function renderNeffPlot(rows, hasExact) {
+  const c = $("plotn");
+  if (!c) return;
+  const g = c.getContext("2d"), W = c.width, H = c.height;
+  const m = { l: 52, r: 12, t: 14, b: 34 };
+  g.clearRect(0, 0, W, H);
+  const Ts = rows.map(r => r.T);
+  // ignore non-finite and absurd spikes (custom potentials can hit a denominator
+  // zero where n_eff blows up) so one outlier doesn't wreck the scale.
+  const sane = v => Number.isFinite(v) && Math.abs(v) < 1e3;
+  let vals = rows.map(r => r.neff).filter(sane);
+  if (hasExact) vals = vals.concat(rows.map(r => r.neffEx).filter(sane));
+  const ref = repExponent();
+  if (Number.isFinite(ref)) vals.push(ref);
+  if (!vals.length) { g.fillStyle = "#666"; g.font = "13px sans-serif";
+    g.fillText("n_eff unavailable", m.l, H / 2); return; }
+  const xmin = Math.min(...Ts), xmax = Math.max(...Ts);
+  let ymin = Math.min(...vals), ymax = Math.max(...vals);
+  const pad = (ymax - ymin) * 0.12 || 1; ymin -= pad; ymax += pad;
+  const X = t => m.l + (W - m.l - m.r) * (t - xmin) / (xmax - xmin || 1);
+  const Y = v => H - m.b - (H - m.t - m.b) * (v - ymin) / (ymax - ymin || 1);
+
+  // axes
+  g.strokeStyle = "#ccc"; g.fillStyle = "#666"; g.font = "11px sans-serif";
+  g.beginPath(); g.moveTo(m.l, m.t); g.lineTo(m.l, H - m.b); g.lineTo(W - m.r, H - m.b); g.stroke();
+  g.fillText("n_eff", 6, m.t + 8); g.fillText("T*", W - m.r - 14, H - 8);
+  g.fillText(ymax.toFixed(1), 6, Y(ymax) + 4); g.fillText(ymin.toFixed(1), 6, Y(ymin) + 4);
+  g.fillText(xmin.toFixed(1), m.l - 6, H - m.b + 14); g.fillText(xmax.toFixed(1), W - m.r - 14, H - m.b + 14);
+
+  // dashed reference at the repulsive exponent (the high-T limit)
+  if (Number.isFinite(ref) && ref >= ymin && ref <= ymax) {
+    g.strokeStyle = "#bbb"; g.setLineDash([4, 4]);
+    g.beginPath(); g.moveTo(m.l, Y(ref)); g.lineTo(W - m.r, Y(ref)); g.stroke();
+    g.setLineDash([]);
+    g.fillStyle = "#999"; g.fillText("n = " + ref + " (high-T limit)", m.l + 8, Y(ref) - 4);
+  }
+
+  // numeric n_eff line (break across any non-finite point)
+  g.strokeStyle = "#2a6df4"; g.lineWidth = 2; g.beginPath();
+  let started = false;
+  rows.forEach(r => {
+    if (!Number.isFinite(r.neff)) { started = false; return; }
+    const x = X(r.T), y = Y(r.neff);
+    started ? g.lineTo(x, y) : g.moveTo(x, y);
+    started = true;
+  });
+  g.stroke();
+
+  // exact n_eff dots
+  if (hasExact) {
+    g.fillStyle = "#e0533d";
+    rows.forEach(r => {
+      if (!Number.isFinite(r.neffEx)) return;
+      g.beginPath(); g.arc(X(r.T), Y(r.neffEx), 3, 0, 7); g.fill();
+    });
+  }
+
+  // legend
+  g.fillStyle = "#2a6df4"; g.fillText("— n_eff (wasm)", W - 160, m.t + 6);
+  if (hasExact) { g.fillStyle = "#e0533d"; g.fillText("● n_eff exact", W - 160, m.t + 22); }
 }
 
 // ---- boot ----
