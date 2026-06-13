@@ -261,32 +261,75 @@ function tGrid(tmin, tmax, np, log) {
   return out;
 }
 
-function compute() {
+// Reduced Stockmayer via the wasm export (used by the Stockmayer preset).
+function stockmayerReduced(tstar, mu2, reltol = 1e-3) {
+  const out = ex.poc_alloc(32); // 4 * f64
+  ex.poc_stockmayer(tstar, mu2, reltol, out);
+  const dv = new DataView(ex.memory.buffer);
+  const r = {
+    b2: dv.getFloat64(out, true),
+    db2: dv.getFloat64(out + 8, true),
+    d2b2: dv.getFloat64(out + 16, true),
+    neff: dv.getFloat64(out + 24, true),
+  };
+  ex.poc_dealloc(out, 32);
+  return r;
+}
+
+// Build one result row for temperature T with the current preset/params.
+function computeRow(preset, pot, T, eps, sig) {
+  if (preset === "stockmayer") {
+    const mu2 = parseFloat($("mu2").value) || 0;
+    const r = stockmayerReduced(T / eps, mu2);   // reduced (ε=σ=1)
+    const s3 = sig ** 3;
+    return { T, num: s3 * r.b2, db2: (s3 * r.db2) / eps,
+             d2b2: (s3 * r.d2b2) / (eps * eps), neff: r.neff, ex: null };
+  }
+  const d = b2derivs(pot.fn, eps, sig, T);
+  return { T, num: d.b2, db2: d.db2, d2b2: d.d2b2, neff: d.neff, ex: exactFor(T, eps, sig) };
+}
+
+let runGen = 0; // generation token: a newer run cancels an older in-flight one
+
+async function compute() {
+  const gen = ++runGen;
+  const preset = presetSel.value;
   const eps = parseFloat($("eps").value), sig = parseFloat($("sig").value);
   let tmin = parseFloat($("tmin").value), tmax = parseFloat($("tmax").value);
   const np = Math.max(2, parseInt($("npts").value) || 2);
   const log = $("tspace").value === "log";
-  if (log && tmin <= 0) tmin = 1e-3; // geometric spacing needs a positive lower bound
-  let pot;
-  try { pot = makePotential(dslEl.value); }
-  catch (e) { $("status").innerHTML = `<span class="err">✗ ${e.message}</span>`; return; }
+  if (log && tmin <= 0) tmin = 1e-3;
 
-  const rows = [];
-  let hasExact = false;
-  for (const T of tGrid(tmin, tmax, np, log)) {
-    const d = b2derivs(pot.fn, eps, sig, T);
-    const exc = exactFor(T, eps, sig);
-    if (exc) hasExact = true;
-    rows.push({ T, num: d.b2, db2: d.db2, d2b2: d.d2b2, neff: d.neff, ex: exc });
+  let pot = null;
+  if (preset !== "stockmayer") {
+    try { pot = makePotential(dslEl.value); }
+    catch (e) { $("status").innerHTML = `<span class="err">✗ ${e.message}</span>`; return; }
   }
-  lastRows = rows; lastHasExact = hasExact;
-  $("status").innerHTML =
-    `✓ compiled <code>${dslEl.value.replace(/</g,"&lt;")}</code> to a ${pot.size}-byte wasm module, ` +
-    `run natively for ${np} temperatures (${log ? "log" : "linear"} spacing) ` +
-    `— B₂, its first two T-derivatives, and n_eff.` +
-    (hasExact ? "" : " <span class=note>(no closed form for a custom potential)</span>");
-  renderTable(rows, hasExact);
-  renderPlotly(rows, hasExact, log);
+
+  const Ts = tGrid(tmin, tmax, np, log);
+  const rows = [];
+  let i = 0;
+  while (i < Ts.length) {
+    if (gen !== runGen) return; // a newer run started — abandon this one
+    const sliceStart = performance.now();
+    do {
+      rows.push(computeRow(preset, pot, Ts[i], eps, sig));
+      i++;
+    } while (i < Ts.length && performance.now() - sliceStart < 16);
+
+    const hasExact = rows.some(r => r.ex);
+    lastRows = rows.slice();
+    lastHasExact = hasExact;
+    renderTable(rows, hasExact);
+    renderPlotly(rows, hasExact, log);
+    $("status").innerHTML = i < Ts.length
+      ? `computing ${i}/${Ts.length}…`
+      : `✓ ${preset === "stockmayer" ? "Stockmayer 4-D cubature" : "compiled <code>" +
+          dslEl.value.replace(/</g, "&lt;") + "</code>"} — ${np} temperatures ` +
+        `(${log ? "log" : "linear"} spacing): B₂, its first two T-derivatives, and n_eff.` +
+        (hasExact ? "" : " <span class=note>(no closed-form overlay)</span>");
+    if (i < Ts.length) await new Promise(r => setTimeout(r, 0));
+  }
 }
 
 function renderTable(rows, hasExact) {
