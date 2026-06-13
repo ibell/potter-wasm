@@ -477,6 +477,21 @@ mod tests {
     }
 
     #[test]
+    fn stockmayer_energy_lj_plus_dipole() {
+        use potter_poc::molecule::Stockmayer;
+        // (μ*)²=0 -> pure LJ, angle-independent.
+        let lj = Stockmayer { eps: 1.0, sig: 1.0, mu2: 0.0 };
+        let r = 1.5_f64;
+        let s6 = (1.0_f64 / r).powi(6);
+        let lj_ref = 4.0 * (s6 * s6 - s6);
+        assert!((lj.energy(r, 0.7, 1.1, 0.3) - lj_ref).abs() < 1e-12);
+        // (μ*)²=1, fully aligned head-to-tail (θ1=θ2=0): ang = 2, so U = LJ - 1*(1/r)^3*2.
+        let sm = Stockmayer { eps: 1.0, sig: 1.0, mu2: 1.0 };
+        let dip = 2.0 * (1.0_f64 / r).powi(3);
+        assert!((sm.energy(r, 0.0, 0.0, 0.0) - (lj_ref - dip)).abs() < 1e-12);
+    }
+
+    #[test]
     fn b2_derivs_from_dsl_matches_closure() {
         use potter_poc::{b2_and_derivs_v, b2_derivs_from_dsl};
         let lj = |r: f64| {

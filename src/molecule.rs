@@ -497,3 +497,26 @@ pub fn co2_epm2() -> Linear {
         ],
     }
 }
+
+/// Stockmayer 12-6-3 potential: a Lennard-Jones centre with a point dipole.
+/// Reduced form (eps=sig=1) with parameter `mu2 = (μ*)²`:
+///   V = 4 eps [(sig/r)^12 - (sig/r)^6]
+///       - eps mu2 (sig/r)^3 [2 cosθ1 cosθ2 - sinθ1 sinθ2 cosφ]
+/// (Bell, J. Chem. Phys. 152, 164508 (2020), Eqs. 47-48.)
+pub struct Stockmayer {
+    pub eps: f64,
+    pub sig: f64,
+    pub mu2: f64,
+}
+
+impl Stockmayer {
+    /// Pair energy at COM separation `r`, orientations (θ1; θ2, φ).
+    pub fn energy(&self, r: f64, th1: f64, th2: f64, phi: f64) -> f64 {
+        let sr = self.sig / r;
+        let sr3 = sr * sr * sr;
+        let sr6 = sr3 * sr3;
+        let lj = 4.0 * self.eps * (sr6 * sr6 - sr6);
+        let ang = 2.0 * th1.cos() * th2.cos() - th1.sin() * th2.sin() * phi.cos();
+        lj - self.eps * self.mu2 * sr3 * ang
+    }
+}
