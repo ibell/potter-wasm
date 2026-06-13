@@ -32,7 +32,9 @@
   code { background: #f3f3f7; padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
   .layout { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-start; }
   .layout > div { flex: 1 1 360px; }
+  #plots { width: 100%; min-height: 200px; }
 </style>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 </head>
 <body>
   <h1>Second virial coefficient B₂(T) — in the browser</h1>
@@ -69,17 +71,24 @@
     <label>T*min <input id="tmin" type="number" value="1.3" step="0.1" /></label>
     <label>T*max <input id="tmax" type="number" value="8" step="0.5" /></label>
     <label>points <input id="npts" type="number" value="24" min="2" step="1" /></label>
+    <label>spacing
+      <select id="tspace">
+        <option value="lin">linear</option>
+        <option value="log">log</option>
+      </select>
+    </label>
     <button id="go" disabled>Compute B₂(T)</button>
   </fieldset>
 
   <div id="status">loading wasm…</div>
 
-  <div class="layout">
-    <div><canvas id="plot" width="430" height="320"></canvas></div>
-    <div><div id="tablewrap"></div></div>
-  </div>
+  <div id="plots"></div>
 
-  <canvas id="plotn" width="860" height="300"></canvas>
+  <div class="row" style="margin-top:14px; display:flex; align-items:center; gap:12px;">
+    <button id="copy" type="button">Copy table</button>
+    <span class="note">copies the table as TSV (paste into Excel / Sheets)</span>
+  </div>
+  <div id="tablewrap"></div>
 
 <script>
 const WASM_B64 = "__WASM_B64__";
@@ -142,28 +151,24 @@ function b2derivs(fn, eps, sig, T, n = 40000) {
 const neffFrom = (b2, db2, d2b2, T) =>
   (-3 * (b2 + T * db2)) / (2 * T * db2 + T * T * d2b2);
 
-const b2LjExact = (T, eps, sig) => sig ** 3 * ex.poc_b2_lj_series(T / eps, 80);
-const b2InvExact = (T, eps, sig, n) =>
-  n > 3 ? ((2 * Math.PI) / 3) * sig ** 3 * ex.poc_tgamma(1 - 3 / n) * (T / eps) ** (-3 / n) : NaN;
-
-// exact LJ (12-6) reduced B2 and its first two T*-derivatives (HCB series,
-// differentiated term-by-term) -> exact n_eff. Mirrors Rust b2_lj_series_derivs.
-function ljNeffExact(tstar, nterms = 80) {
-  let factorial = 1, s0 = 0, s1 = 0, s2 = 0;
+// Exact LJ (12-6) REDUCED B2 and its first two u-derivatives (u = T/eps), from the
+// HCB Gamma-series differentiated term-by-term. Mirrors Rust b2_lj_series_derivs.
+function ljReducedSeries(u, nterms = 80) {
+  let factorial = 1, g0 = 0, g1 = 0, g2 = 0;
   for (let j = 0; j < nterms; j++) {
     if (j > 0) factorial *= j;
     const p = (2 * j + 1) / 2;
     const coeff = -((2 ** p) / (4 * factorial)) * ex.poc_tgamma((2 * j - 1) / 4);
     const q = (2 * j + 1) / 4;
-    const t0 = coeff * tstar ** (-q);
-    const t1 = coeff * (-q) * tstar ** (-q - 1);
-    const t2 = coeff * q * (q + 1) * tstar ** (-q - 2);
-    if (Number.isFinite(t0)) s0 += t0;
-    if (Number.isFinite(t1)) s1 += t1;
-    if (Number.isFinite(t2)) s2 += t2;
+    const a0 = coeff * u ** (-q);
+    const a1 = coeff * (-q) * u ** (-q - 1);
+    const a2 = coeff * q * (q + 1) * u ** (-q - 2);
+    if (Number.isFinite(a0)) g0 += a0;
+    if (Number.isFinite(a1)) g1 += a1;
+    if (Number.isFinite(a2)) g2 += a2;
   }
-  // n_eff is dimensionless / scale-invariant, so evaluate on the reduced series.
-  return neffFrom(s0, s1, s2, tstar);
+  const c = (2 * Math.PI) / 3;
+  return { g0: c * g0, g1: c * g1, g2: c * g2 };
 }
 
 // ---- UI ----
@@ -180,19 +185,25 @@ function syncPreset() {
 presetSel.onchange = syncPreset;
 nexp.oninput = () => { if (presetSel.value === "inv") syncPreset(); };
 
+// Exact closed-form { b2, db2, d2b2, neff } for a preset, or null for custom.
+// Chain rule in u = T/eps: dB2/dT = (dB2/du)/eps, d2B2/dT2 = (d2B2/du2)/eps^2.
 function exactFor(T, eps, sig) {
-  const p = presetSel.value;
-  if (p === "lj") return b2LjExact(T, eps, sig);
-  if (p === "inv") return b2InvExact(T, eps, sig, parseInt(nexp.value) || 12);
-  return NaN; // custom: no closed form
-}
-
-// exact n_eff(T) for the presets (scale-invariant: depends only on T/eps).
-function neffExactFor(T, eps) {
-  const p = presetSel.value;
-  if (p === "lj") return ljNeffExact(T / eps);
-  if (p === "inv") return parseInt(nexp.value) || 12; // n_eff == n exactly
-  return NaN; // custom: no closed form
+  const p = presetSel.value, u = T / eps, sig3 = sig ** 3;
+  if (p === "lj") {
+    const s = ljReducedSeries(u);
+    const b2 = sig3 * s.g0, db2 = (sig3 * s.g1) / eps, d2b2 = (sig3 * s.g2) / (eps * eps);
+    return { b2, db2, d2b2, neff: neffFrom(b2, db2, d2b2, T) };
+  }
+  if (p === "inv") {
+    const n = parseInt(nexp.value) || 12;
+    if (n <= 3) return null; // B2 diverges for n <= 3
+    const q = 3 / n, a = ((2 * Math.PI) / 3) * sig3 * ex.poc_tgamma(1 - q);
+    const b2 = a * u ** (-q);
+    const db2 = (a * (-q) * u ** (-q - 1)) / eps;
+    const d2b2 = (a * q * (q + 1) * u ** (-q - 2)) / (eps * eps);
+    return { b2, db2, d2b2, neff: n }; // n_eff == n exactly
+  }
+  return null; // custom: no closed form
 }
 
 // the repulsive exponent the high-T limit should approach, for a reference line.
@@ -203,42 +214,56 @@ function repExponent() {
   return NaN;
 }
 
+let lastRows = [], lastHasExact = false; // retained for "Copy table"
+
+// T grid: linear or geometric (log) spacing between tmin and tmax.
+function tGrid(tmin, tmax, np, log) {
+  const out = [];
+  for (let i = 0; i < np; i++) {
+    const f = np === 1 ? 0 : i / (np - 1);
+    out.push(log ? tmin * (tmax / tmin) ** f : tmin + (tmax - tmin) * f);
+  }
+  return out;
+}
+
 function compute() {
   const eps = parseFloat($("eps").value), sig = parseFloat($("sig").value);
-  const tmin = parseFloat($("tmin").value), tmax = parseFloat($("tmax").value);
+  let tmin = parseFloat($("tmin").value), tmax = parseFloat($("tmax").value);
   const np = Math.max(2, parseInt($("npts").value) || 2);
+  const log = $("tspace").value === "log";
+  if (log && tmin <= 0) tmin = 1e-3; // geometric spacing needs a positive lower bound
   let pot;
   try { pot = makePotential(dslEl.value); }
   catch (e) { $("status").innerHTML = `<span class="err">✗ ${e.message}</span>`; return; }
 
   const rows = [];
   let hasExact = false;
-  for (let i = 0; i < np; i++) {
-    const T = tmin + (tmax - tmin) * (i / (np - 1));
+  for (const T of tGrid(tmin, tmax, np, log)) {
     const d = b2derivs(pot.fn, eps, sig, T);
-    const exa = exactFor(T, eps, sig);
-    const neffEx = neffExactFor(T, eps);
-    if (Number.isFinite(exa)) hasExact = true;
-    rows.push({ T, num: d.b2, db2: d.db2, d2b2: d.d2b2, neff: d.neff, exa, neffEx });
+    const exc = exactFor(T, eps, sig);
+    if (exc) hasExact = true;
+    rows.push({ T, num: d.b2, db2: d.db2, d2b2: d.d2b2, neff: d.neff, ex: exc });
   }
+  lastRows = rows; lastHasExact = hasExact;
   $("status").innerHTML =
     `✓ compiled <code>${dslEl.value.replace(/</g,"&lt;")}</code> to a ${pot.size}-byte wasm module, ` +
-    `run natively for ${np} temperatures — B₂, its first two T-derivatives, and n_eff.` +
+    `run natively for ${np} temperatures (${log ? "log" : "linear"} spacing) ` +
+    `— B₂, its first two T-derivatives, and n_eff.` +
     (hasExact ? "" : " <span class=note>(no closed form for a custom potential)</span>");
   renderTable(rows, hasExact);
-  renderPlot(rows, hasExact);
-  renderNeffPlot(rows, hasExact);
+  renderPlotly(rows, hasExact, log);
 }
 
 function renderTable(rows, hasExact) {
   let h = "<table><tr><th>T*</th><th>B₂</th><th>dB₂/dT</th><th>d²B₂/dT²</th>" +
           "<th>n_eff</th>" + (hasExact ? "<th>n_eff*</th>" : "") + "</tr>";
   for (const r of rows) {
+    const ne = r.ex ? r.ex.neff : NaN;
     h += `<tr><td>${r.T.toFixed(3)}</td><td>${r.num.toFixed(4)}</td>` +
          `<td>${r.db2.toFixed(4)}</td><td>${r.d2b2.toFixed(4)}</td>` +
          `<td>${Number.isFinite(r.neff) ? r.neff.toFixed(3) : "—"}</td>`;
     if (hasExact)
-      h += `<td>${Number.isFinite(r.neffEx) ? r.neffEx.toFixed(3) : "—"}</td>`;
+      h += `<td>${Number.isFinite(ne) ? ne.toFixed(3) : "—"}</td>`;
     h += "</tr>";
   }
   $("tablewrap").innerHTML = h + "</table>" +
@@ -247,106 +272,97 @@ function renderTable(rows, hasExact) {
       : "");
 }
 
-function renderPlot(rows, hasExact) {
-  const c = $("plot"), g = c.getContext("2d"), W = c.width, H = c.height;
-  const m = { l: 52, r: 12, t: 12, b: 34 };
-  g.clearRect(0, 0, W, H);
+// Four vertically-stacked subplots (B₂, dB₂/dT, d²B₂/dT², n_eff) sharing the T
+// axis, drawn with Plotly. Numeric = blue line, exact (presets) = red markers.
+function renderPlotly(rows, hasExact, logX) {
+  const host = $("plots");
+  if (!host) return;
+  if (typeof Plotly === "undefined") {
+    host.innerHTML = "<div class=note>Plots are rendered with Plotly (loaded from a CDN). " +
+      "Offline file:// has no network, so the plots are unavailable here — the table and " +
+      "“Copy table” still work.</div>";
+    return;
+  }
   const Ts = rows.map(r => r.T);
-  let vals = rows.map(r => r.num).filter(Number.isFinite);
-  if (hasExact) vals = vals.concat(rows.map(r => r.exa).filter(Number.isFinite));
-  const xmin = Math.min(...Ts), xmax = Math.max(...Ts);
-  let ymin = Math.min(...vals, 0), ymax = Math.max(...vals, 0);
-  const pad = (ymax - ymin) * 0.08 || 1; ymin -= pad; ymax += pad;
-  const X = (t) => m.l + (W - m.l - m.r) * (t - xmin) / (xmax - xmin || 1);
-  const Y = (v) => H - m.b - (H - m.t - m.b) * (v - ymin) / (ymax - ymin || 1);
+  const BLUE = "#2a6df4", RED = "#e0533d";
+  const line = (y, axis) => ({
+    x: Ts, y, type: "scatter", mode: "lines", line: { color: BLUE, width: 2 },
+    yaxis: axis, hovertemplate: "T*=%{x:.3g}<br>%{y:.5g}<extra></extra>",
+  });
+  const dots = (y, axis) => ({
+    x: Ts, y, type: "scatter", mode: "markers", marker: { color: RED, size: 6 },
+    yaxis: axis, hovertemplate: "exact %{y:.5g}<extra></extra>",
+  });
 
-  // axes + zero line
-  g.strokeStyle = "#ccc"; g.fillStyle = "#666"; g.font = "11px sans-serif";
-  g.beginPath(); g.moveTo(m.l, m.t); g.lineTo(m.l, H - m.b); g.lineTo(W - m.r, H - m.b); g.stroke();
-  if (ymin < 0 && ymax > 0) {
-    g.strokeStyle = "#e8e8e8"; g.beginPath(); g.moveTo(m.l, Y(0)); g.lineTo(W - m.r, Y(0)); g.stroke();
-  }
-  g.fillText("B₂", 6, m.t + 8); g.fillText("T*", W - m.r - 14, H - 8);
-  g.fillText(ymax.toFixed(2), 6, Y(ymax) + 4); g.fillText(ymin.toFixed(2), 6, Y(ymin) + 4);
-  g.fillText(xmin.toFixed(1), m.l - 6, H - m.b + 14); g.fillText(xmax.toFixed(1), W - m.r - 14, H - m.b + 14);
-
-  // numeric line
-  g.strokeStyle = "#2a6df4"; g.lineWidth = 2; g.beginPath();
-  rows.forEach((r, i) => { const x = X(r.T), y = Y(r.num); i ? g.lineTo(x, y) : g.moveTo(x, y); });
-  g.stroke();
-  // exact dots
+  const traces = [
+    line(rows.map(r => r.num), "y4"),
+    line(rows.map(r => r.db2), "y3"),
+    line(rows.map(r => r.d2b2), "y2"),
+    line(rows.map(r => r.neff), "y"),
+  ];
   if (hasExact) {
-    g.fillStyle = "#e0533d";
-    rows.forEach(r => {
-      if (!Number.isFinite(r.exa)) return;
-      g.beginPath(); g.arc(X(r.T), Y(r.exa), 3, 0, 7); g.fill();
-    });
+    traces.push(dots(rows.map(r => (r.ex ? r.ex.b2 : null)), "y4"));
+    traces.push(dots(rows.map(r => (r.ex ? r.ex.db2 : null)), "y3"));
+    traces.push(dots(rows.map(r => (r.ex ? r.ex.d2b2 : null)), "y2"));
+    traces.push(dots(rows.map(r => (r.ex ? r.ex.neff : null)), "y"));
   }
-  // legend
-  g.fillStyle = "#2a6df4"; g.fillText("— numeric (wasm)", W - 150, m.t + 6);
-  if (hasExact) { g.fillStyle = "#e0533d"; g.fillText("● exact", W - 150, m.t + 22); }
+
+  const band = (lo, hi, title) => ({
+    domain: [lo, hi], title: { text: title, font: { size: 12 } }, zeroline: true,
+    automargin: true, ticks: "outside", tickfont: { size: 10 },
+    showline: true, linecolor: "#ddd",
+  });
+  const layout = {
+    height: 660, margin: { l: 72, r: 16, t: 20, b: 44 }, showlegend: false,
+    font: { size: 11 }, paper_bgcolor: "#fff", plot_bgcolor: "#fff",
+    xaxis: {
+      domain: [0, 1], anchor: "y", title: { text: "T*" },
+      type: logX ? "log" : "linear", ticks: "outside", showline: true, linecolor: "#ddd",
+    },
+    yaxis: band(0.0, 0.21, "n_eff"),
+    yaxis2: band(0.27, 0.47, "d²B₂/dT²"),
+    yaxis3: band(0.53, 0.73, "dB₂/dT"),
+    yaxis4: band(0.79, 1.0, "B₂"),
+  };
+  // dashed reference at the repulsive exponent on the n_eff (bottom) panel
+  const ref = repExponent();
+  if (Number.isFinite(ref)) {
+    layout.shapes = [{
+      type: "line", xref: "paper", x0: 0, x1: 1, yref: "y", y0: ref, y1: ref,
+      line: { color: "#bbb", width: 1, dash: "dash" },
+    }];
+    layout.annotations = [{
+      xref: "paper", x: 0.012, yref: "y", y: ref, text: "n = " + ref + " (high-T limit)",
+      showarrow: false, font: { size: 10, color: "#999" }, xanchor: "left", yanchor: "bottom",
+    }];
+  }
+  Plotly.react(host, traces, layout, { displayModeBar: false, responsive: true });
 }
 
-function renderNeffPlot(rows, hasExact) {
-  const c = $("plotn");
-  if (!c) return;
-  const g = c.getContext("2d"), W = c.width, H = c.height;
-  const m = { l: 52, r: 12, t: 14, b: 34 };
-  g.clearRect(0, 0, W, H);
-  const Ts = rows.map(r => r.T);
-  // ignore non-finite and absurd spikes (custom potentials can hit a denominator
-  // zero where n_eff blows up) so one outlier doesn't wreck the scale.
-  const sane = v => Number.isFinite(v) && Math.abs(v) < 1e3;
-  let vals = rows.map(r => r.neff).filter(sane);
-  if (hasExact) vals = vals.concat(rows.map(r => r.neffEx).filter(sane));
-  const ref = repExponent();
-  if (Number.isFinite(ref)) vals.push(ref);
-  if (!vals.length) { g.fillStyle = "#666"; g.font = "13px sans-serif";
-    g.fillText("n_eff unavailable", m.l, H / 2); return; }
-  const xmin = Math.min(...Ts), xmax = Math.max(...Ts);
-  let ymin = Math.min(...vals), ymax = Math.max(...vals);
-  const pad = (ymax - ymin) * 0.12 || 1; ymin -= pad; ymax += pad;
-  const X = t => m.l + (W - m.l - m.r) * (t - xmin) / (xmax - xmin || 1);
-  const Y = v => H - m.b - (H - m.t - m.b) * (v - ymin) / (ymax - ymin || 1);
-
-  // axes
-  g.strokeStyle = "#ccc"; g.fillStyle = "#666"; g.font = "11px sans-serif";
-  g.beginPath(); g.moveTo(m.l, m.t); g.lineTo(m.l, H - m.b); g.lineTo(W - m.r, H - m.b); g.stroke();
-  g.fillText("n_eff", 6, m.t + 8); g.fillText("T*", W - m.r - 14, H - 8);
-  g.fillText(ymax.toFixed(1), 6, Y(ymax) + 4); g.fillText(ymin.toFixed(1), 6, Y(ymin) + 4);
-  g.fillText(xmin.toFixed(1), m.l - 6, H - m.b + 14); g.fillText(xmax.toFixed(1), W - m.r - 14, H - m.b + 14);
-
-  // dashed reference at the repulsive exponent (the high-T limit)
-  if (Number.isFinite(ref) && ref >= ymin && ref <= ymax) {
-    g.strokeStyle = "#bbb"; g.setLineDash([4, 4]);
-    g.beginPath(); g.moveTo(m.l, Y(ref)); g.lineTo(W - m.r, Y(ref)); g.stroke();
-    g.setLineDash([]);
-    g.fillStyle = "#999"; g.fillText("n = " + ref + " (high-T limit)", m.l + 8, Y(ref) - 4);
+// ---- copy table to clipboard (TSV; Excel/Sheets-friendly) ----
+function fallbackCopy(text, done) {
+  const ta = document.createElement("textarea");
+  ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.focus(); ta.select();
+  try { document.execCommand("copy"); done(); } catch (e) { /* ignore */ }
+  document.body.removeChild(ta);
+}
+function copyTable() {
+  if (!lastRows.length) return;
+  const cols = ["T*", "B2", "dB2/dT", "d2B2/dT2", "n_eff"];
+  if (lastHasExact) cols.push("n_eff_exact");
+  const lines = [cols.join("\t")];
+  for (const r of lastRows) {
+    const row = [r.T, r.num, r.db2, r.d2b2, r.neff];
+    if (lastHasExact) row.push(r.ex ? r.ex.neff : "");
+    lines.push(row.join("\t"));
   }
-
-  // numeric n_eff line (break across any non-finite point)
-  g.strokeStyle = "#2a6df4"; g.lineWidth = 2; g.beginPath();
-  let started = false;
-  rows.forEach(r => {
-    if (!Number.isFinite(r.neff)) { started = false; return; }
-    const x = X(r.T), y = Y(r.neff);
-    started ? g.lineTo(x, y) : g.moveTo(x, y);
-    started = true;
-  });
-  g.stroke();
-
-  // exact n_eff dots
-  if (hasExact) {
-    g.fillStyle = "#e0533d";
-    rows.forEach(r => {
-      if (!Number.isFinite(r.neffEx)) return;
-      g.beginPath(); g.arc(X(r.T), Y(r.neffEx), 3, 0, 7); g.fill();
-    });
-  }
-
-  // legend
-  g.fillStyle = "#2a6df4"; g.fillText("— n_eff (wasm)", W - 160, m.t + 6);
-  if (hasExact) { g.fillStyle = "#e0533d"; g.fillText("● n_eff exact", W - 160, m.t + 22); }
+  const text = lines.join("\n");
+  const btn = $("copy"), label = btn.textContent;
+  const done = () => { btn.textContent = "copied ✓"; setTimeout(() => (btn.textContent = label), 1200); };
+  if (navigator.clipboard && navigator.clipboard.writeText)
+    navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done));
+  else fallbackCopy(text, done);
 }
 
 // ---- boot ----
@@ -357,6 +373,8 @@ function renderNeffPlot(rows, hasExact) {
     ex = instance.exports;
     $("go").disabled = false;
     $("go").onclick = compute;
+    $("copy").onclick = copyTable;
+    $("tspace").onchange = compute;
     $("status").textContent = "ready.";
     syncPreset();
     compute();
