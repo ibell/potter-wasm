@@ -238,6 +238,23 @@ return `[mayer, e^{-U/T}·U/T², e^{-U/T}·(U²/T⁴ − 2U/T³)]` on the shared
 The analytic hard-core contribution `(2π/3)·rmin³` is T-independent, so it adds to
 B₂ only (its T-derivatives are 0).
 
+### Geometry-independent high-T anchor for LJ-site molecules
+For a rigid molecule built from **r⁻¹² (LJ) sites at fixed finite separations**,
+`n_eff → 12` as `T → ∞`, independent of geometry. Reason: the thermal core
+diameter `d(T) ~ σ(ε/T)^{1/12} → 0` eventually drops below every inter-site
+spacing, so the molecular excluded volume decouples into independent site–site
+contributions, each `~ d³ ~ T^{-1/4}`. (The Onsager `L²d` term that would give 36
+needs a *continuous* rod of material — overlapping sites at spacing ≪ σ — not
+discrete sites.) This makes a clean Phase-2 validation. Caveats:
+- **r⁻¹² wall only.** LJ + point charges / quadrupole (TraPPE N₂) still → 12
+  (Coulomb r⁻¹ is softer than the wall). **Hellmann exp-repulsion `A e^{-αR}`
+  molecules → ∞** (logarithmically; harder than any power law) — a separate
+  diverging-hardness check, not a 12-anchor.
+- **Slow approach.** A discrete chain converges to 12 more slowly than a single
+  site (corrections ∝ a low power of `d/L`), so assert the *trend* to 12 at large
+  T* / via extrapolation, not tight equality at modest T*. Single-site LJ stays
+  the fast, exact anchor.
+
 ## 9. Out of scope
 
 - **Quantum-corrected B₂ (WK / QFH).** The QFH *effective* potential is itself
