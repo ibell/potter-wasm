@@ -125,26 +125,45 @@ N=1 case — implementer's choice; do not regress existing tests).
 
 ## 5. Validation (uses closed forms already in the tree — no new data)
 
+### 5.0 Anchor case: single-site Lennard-Jones, two independent ways
+The centerpiece of Phase 1 is LJ B₂ + `B₂'` + `B₂''` + `n_eff` computed by **two
+independent methods that must agree**:
+
+- **(a) Integration** — the deterministic vector adaptive Simpson of §4.
+- **(b) MSMC** — Mayer sampling of the single bond `f₁₂` with the CRN derivative
+  tallies of §6 (this is the B₂ instance of the MSMC estimator, the simplest
+  cluster — one bond — and so the natural place to validate the Monte-Carlo
+  derivative machinery against a known answer before B₃/B₄).
+
+They are cross-checked against each other and against the closed forms below, with
+the **high-T limit `n_eff → 12`** as the shared physical anchor both must hit.
+
+**Why 12 is exact in the limit:** in the HCB series `B₂ ~ Σ_j c_j T*^{-(2j+1)/4}`,
+the `j = 0` term `∝ T*^{-1/4}` dominates as `T* → ∞`. `T*^{-1/4}` is the `T^{-3/n}`
+scaling with `n = 12` — the LJ repulsive exponent — so `n_eff → 12`. (Method (b)
+must reproduce this to within its sampling error; method (a) to integrator
+tolerance.)
+
+### 5.1 Supporting oracles
 1. **IPL `ε(σ/r)ⁿ`:** `n_eff(T) == n` to integrator tolerance at several T and
-   several n (e.g. n = 6, 9, 12, 18). Strongest test; the exact Γ-function B₂ is
-   already implemented.
+   several n (e.g. n = 6, 9, 12, 18). Strongest deterministic test; the exact
+   Γ-function B₂ is already implemented.
 2. **LJ analytic oracle:** differentiate `b2_lj_series` (HCB Γ-series) term-by-term.
-   Each term ∝ `T*^{-(2j+1)/4}`, so with `p_j = (2j+1)/4`:
+   With `p_j = (2j+1)/4`:
    `B₂' = Σ c_j·(−p_j)·T*^{−p_j−1}`, `B₂'' = Σ c_j·(−p_j)(−p_j−1)·T*^{−p_j−2}`.
    Assert the integrated `db2_dt`, `d2b2_dt2` match this series (loosely at low
    T*, tightly for T* ≥ 2 where the series converges, mirroring the existing B₂
-   series test).
-3. **Limit:** LJ `n_eff(T*)` → 12 as T* grows (repulsion-dominated); finite,
-   well-behaved through the Boyle region.
-4. **Cross-check (optional, as oracle only):** central finite difference of `b2()`
-   at T±h agrees with the analytic `db2_dt` to FD accuracy — a guard, not the
-   primary check.
+   series test). MSMC agrees within ~1σ.
+3. **Cross-check (oracle only):** central finite difference of `b2()` at T±h
+   agrees with the analytic `db2_dt` to FD accuracy — a guard, not a primary check.
 
-## 6. Mapping to Monte Carlo (MSMC) — design, Phase 3
+## 6. Mapping to Monte Carlo (MSMC) — design
 
 This is where the correlation argument becomes a genuine **variance**-reduction
 lever via **common random numbers (CRN)**: estimate the value and both derivatives
-from the *same* sample stream.
+from the *same* sample stream. The **B₂ instance (single bond, `γ = f₁₂`) is built
+in Phase 1** as the validation vehicle (§5.0); B₃/B₄ (multi-bond clusters) follow
+in Phase 3 with the identical estimator.
 
 ### Setup
 MSMC (Kofke–Singer, `src/msmc.rs`) writes a cluster integral as
@@ -229,10 +248,14 @@ B₂ only (its T-derivatives are 0).
 
 ## 10. Phasing
 
-- **Phase 1 (this round):** spherical / DSL B₂ + `n_eff`, vector adaptive Simpson,
-  all backends, WASM exports, IPL + LJ-series validation. This is the browser story.
+- **Phase 1 (this round):** single-site LJ as the anchor (§5.0) computed **two
+  ways** — (a) deterministic vector adaptive Simpson and (b) MSMC single-bond with
+  CRN derivative tallies — plus spherical/DSL B₂ + `n_eff` across all backends,
+  WASM exports, and the IPL + LJ-series validation. Both methods must hit
+  `n_eff → 12` at high T. This is the browser story and validates the MC derivative
+  estimator on a known answer.
 - **Phase 2:** rigid-molecule classical B₂ derivatives; B₃ cubature derivatives.
-- **Phase 3:** MSMC derivatives (CRN estimator above) for B₃/B₄.
+- **Phase 3:** MSMC derivatives for B₃/B₄ (same CRN estimator, multi-bond clusters).
 
 ## 11. File-by-file change list (Phase 1)
 
@@ -240,6 +263,10 @@ B₂ only (its T-derivatives are 0).
   all-component refinement criterion.
 - `src/physics.rs` — vector B₂ integrand; `B2Derivs`; `b2_and_derivs_v`,
   `b2_and_derivs`; `neff`; analytic `b2_lj_series` derivative oracles (test helpers).
+- `src/msmc.rs` — single-bond (B₂) Mayer-sampling path that accumulates the
+  `A_ref, A₀, A₁, A₂` tallies of §6 on one walk; returns `B2Derivs` + `n_eff` with
+  per-quantity stderr.
 - `src/lib.rs` — `b2_derivs_from_dsl`; WASM exports `poc_b2_derivs`, `poc_neff`.
-- Tests — IPL flat-at-n; LJ-series derivative match; high-T limit; FD guard.
+- Tests — **LJ two-way agreement (integration vs MSMC) + `n_eff → 12` anchor**;
+  IPL flat-at-n; LJ-series derivative match; FD guard.
 - (Optional now) `web/` — `n_eff(T)` overlay on existing presets.
