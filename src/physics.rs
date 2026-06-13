@@ -16,7 +16,7 @@
 //! can all be plugged in and compared.
 
 use crate::dsl::{self, Expr};
-use crate::integrate::{adaptive_simpson, composite_simpson};
+use crate::integrate::{adaptive_simpson, adaptive_simpson3, composite_simpson};
 
 pub const PI: f64 = std::f64::consts::PI;
 
@@ -128,6 +128,81 @@ pub fn b2(pot: &Potential, t: f64, tol: f64) -> f64 {
 }
 pub fn b2_finegrid(pot: &Potential, t: f64, n: usize) -> f64 {
     b2_v_grid(&|r| pot.v(r), t, n)
+}
+
+/// B₂ and its first two temperature derivatives, all integrated on one shared
+/// adaptive grid.
+#[derive(Clone, Copy, Debug)]
+pub struct B2Derivs {
+    pub b2: f64,
+    pub db2_dt: f64,
+    pub d2b2_dt2: f64,
+}
+
+impl B2Derivs {
+    /// potter's effective repulsive exponent n_eff(T) for this point.
+    #[inline]
+    pub fn neff(&self, t: f64) -> f64 {
+        neff(self, t)
+    }
+}
+
+/// potter's effective repulsive exponent (from `squarewell.py`):
+///   n_eff = -3 (B₂ + T B₂') / (2 T B₂' + T² B₂'')
+/// Dimensionless: identical in reduced or real units. Recovers `n` exactly for an
+/// inverse-power potential ε(σ/r)ⁿ.
+#[inline]
+pub fn neff(d: &B2Derivs, t: f64) -> f64 {
+    -3.0 * (d.b2 + t * d.db2_dt) / (2.0 * t * d.db2_dt + t * t * d.d2b2_dt2)
+}
+
+/// Vector integrand `[f₀, f₁, f₂]` for `[B₂, B₂', B₂'']` (each ×r²·Jacobian), with
+/// the same `s -> r = s/(1-s)` domain map as `b2_integrand_s`. The Boltzmann factor
+/// is differentiated analytically (V is T-independent); the `−1` of the Mayer
+/// function is T-independent and so absent from f₁, f₂. At the repulsive core
+/// (V → ∞) `e^{-V/T} → 0` dominates, so f₁ = f₂ = 0 and f₀ = −1.
+#[inline]
+fn b2_deriv_integrand_s<V: Fn(f64) -> f64>(v: &V, t: f64, s: f64) -> [f64; 3] {
+    let om = 1.0 - s;
+    if om <= 0.0 {
+        return [0.0; 3]; // s = 1 -> r = inf
+    }
+    let r = s / om;
+    let w = r * r / (om * om); // r^2 * Jacobian
+    let vv = v(r);
+    let (f0, f1, f2) = if vv.is_finite() {
+        let e = (-vv / t).exp();
+        let t2 = t * t;
+        (
+            e - 1.0,
+            e * vv / t2,
+            e * (vv * vv / (t2 * t2) - 2.0 * vv / (t2 * t)),
+        )
+    } else {
+        (-1.0, 0.0, 0.0)
+    };
+    let mut out = [f0 * w, f1 * w, f2 * w];
+    for x in out.iter_mut() {
+        if !x.is_finite() {
+            *x = 0.0;
+        }
+    }
+    out
+}
+
+/// B₂ and its first two T-derivatives for any potential closure, on one shared grid.
+pub fn b2_and_derivs_v<V: Fn(f64) -> f64>(v: &V, t: f64, tol: f64) -> B2Derivs {
+    let i = adaptive_simpson3(&|s| b2_deriv_integrand_s(v, t, s), 0.0, 1.0, tol, 60);
+    B2Derivs {
+        b2: -2.0 * PI * i[0],
+        db2_dt: -2.0 * PI * i[1],
+        d2b2_dt2: -2.0 * PI * i[2],
+    }
+}
+
+/// B₂ and its first two T-derivatives for a compiled `Potential`.
+pub fn b2_and_derivs(pot: &Potential, t: f64, tol: f64) -> B2Derivs {
+    b2_and_derivs_v(&|r| pot.v(r), t, tol)
 }
 
 // ------------------------------- B3 -------------------------------
@@ -286,4 +361,41 @@ pub fn b2_lj_series(tstar: f64, nterms: usize) -> f64 {
         }
     }
     (2.0 * PI / 3.0) * sum
+}
+
+/// Closed-form LJ (12-6) reduced B₂ **and its first two T*-derivatives**, by
+/// differentiating the HCB Γ-series term-by-term — the analytic oracle for the
+/// integrated derivatives. Each term is `coeff_j · T*^{-q_j}` with
+/// `q_j = (2j+1)/4`, so `d/dT*` brings down `-q_j`, and `d²/dT*²` brings
+/// `q_j (q_j+1)`. (σ = ε = 1.)
+pub fn b2_lj_series_derivs(tstar: f64, nterms: usize) -> B2Derivs {
+    let mut factorial = 1.0f64;
+    let (mut s0, mut s1, mut s2) = (0.0f64, 0.0f64, 0.0f64);
+    for j in 0..nterms {
+        let jf = j as f64;
+        if j > 0 {
+            factorial *= jf;
+        }
+        let p = (2.0 * jf + 1.0) / 2.0;
+        let coeff = -(2.0f64.powf(p) / (4.0 * factorial)) * libm::tgamma((2.0 * jf - 1.0) / 4.0);
+        let q = (2.0 * jf + 1.0) / 4.0;
+        let t0 = coeff * tstar.powf(-q);
+        let t1 = coeff * (-q) * tstar.powf(-q - 1.0);
+        let t2 = coeff * q * (q + 1.0) * tstar.powf(-q - 2.0);
+        if t0.is_finite() {
+            s0 += t0;
+        }
+        if t1.is_finite() {
+            s1 += t1;
+        }
+        if t2.is_finite() {
+            s2 += t2;
+        }
+    }
+    let c = 2.0 * PI / 3.0;
+    B2Derivs {
+        b2: c * s0,
+        db2_dt: c * s1,
+        d2b2_dt2: c * s2,
+    }
 }

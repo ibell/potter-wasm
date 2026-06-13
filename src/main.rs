@@ -323,6 +323,16 @@ mod tests {
     }
 
     #[test]
+    fn vector_adaptive_simpson_integrates_each_component() {
+        use potter_poc::integrate::adaptive_simpson3;
+        // f(x) = [1, x, x^2] over [0,1] -> [1, 1/2, 1/3], all on ONE shared grid.
+        let i = adaptive_simpson3(&|x| [1.0, x, x * x], 0.0, 1.0, 1e-12, 50);
+        assert!((i[0] - 1.0).abs() < 1e-10, "got {}", i[0]);
+        assert!((i[1] - 0.5).abs() < 1e-10, "got {}", i[1]);
+        assert!((i[2] - 1.0 / 3.0).abs() < 1e-10, "got {}", i[2]);
+    }
+
+    #[test]
     fn jit_handles_transcendentals() {
         // A potential using exp/sqrt exercises the libm-shim call path in the JIT.
         use potter_poc::JitPotential;
@@ -360,5 +370,115 @@ mod tests {
             assert!((b2(&p, t, 1e-12) - b2_v(&|r| f.v(r), t, 1e-12)).abs() < 1e-9);
             assert!((b3(&p, t, 1e-7) - b3_v(&|r| f.v(r), t, 1e-7)).abs() < 1e-6, "B3 T*={t}");
         }
+    }
+
+    #[test]
+    fn b2_and_derivs_value_and_fd_first_derivative() {
+        use potter_poc::{b2_and_derivs_v, b2_v};
+        let lj = |r: f64| {
+            let s6 = (1.0_f64 / r).powi(6);
+            4.0 * (s6 * s6 - s6)
+        };
+        let t = 1.5;
+        let d = b2_and_derivs_v(&lj, t, 1e-12);
+        // (a) the B2 component must equal the existing scalar integrator
+        let b2_ref = b2_v(&lj, t, 1e-12);
+        assert!((d.b2 - b2_ref).abs() < 1e-9, "B2 {} vs {}", d.b2, b2_ref);
+        // (b) dB2/dT must match a central finite difference of B2(T)
+        let h = 1e-4;
+        let fd = (b2_v(&lj, t + h, 1e-12) - b2_v(&lj, t - h, 1e-12)) / (2.0 * h);
+        assert!((d.db2_dt - fd).abs() < 1e-5, "dB2/dT {} vs FD {}", d.db2_dt, fd);
+        // (c) n_eff is finite
+        assert!(d.neff(t).is_finite(), "neff not finite: {}", d.neff(t));
+    }
+
+    #[test]
+    fn neff_equals_n_for_inverse_power() {
+        use potter_poc::{b2_and_derivs, Potential};
+        // For u = eps*(sig/r)^n, n_eff(T) == n exactly, at every T.
+        for &n in &[6, 9, 12, 18] {
+            let src = format!("eps*(sig/r)**{n}");
+            let p = Potential::compile(&src, 1.0, 1.0).unwrap();
+            for &t in &[1.0_f64, 2.0, 5.0] {
+                let d = b2_and_derivs(&p, t, 1e-12);
+                let ne = d.neff(t);
+                assert!((ne - n as f64).abs() < 1e-3, "n={n} T*={t}: n_eff={ne}");
+            }
+        }
+    }
+
+    #[test]
+    fn lj_derivs_match_hcb_series() {
+        use potter_poc::{b2_and_derivs_v, b2_lj_series_derivs};
+        let lj = |r: f64| {
+            let s6 = (1.0_f64 / r).powi(6);
+            4.0 * (s6 * s6 - s6)
+        };
+        for &t in &[2.0_f64, 3.0, 5.0] {
+            let num = b2_and_derivs_v(&lj, t, 1e-12);
+            let ser = b2_lj_series_derivs(t, 60);
+            assert!(((num.b2 - ser.b2) / ser.b2).abs() < 1e-4, "B2 T*={t}");
+            assert!(((num.db2_dt - ser.db2_dt) / ser.db2_dt).abs() < 1e-4, "B2' T*={t}");
+            assert!(((num.d2b2_dt2 - ser.d2b2_dt2) / ser.d2b2_dt2).abs() < 1e-3, "B2'' T*={t}");
+            assert!((num.neff(t) - ser.neff(t)).abs() < 1e-3, "neff T*={t}");
+        }
+    }
+
+    #[test]
+    fn lj_neff_high_temperature_limit_is_twelve() {
+        use potter_poc::b2_lj_series_derivs;
+        // Leading HCB term ~ T*^{-1/4} = T^{-3/n} with n = 12 -> n_eff -> 12.
+        let ne = b2_lj_series_derivs(1e6, 60).neff(1e6);
+        assert!((ne - 12.0).abs() < 0.05, "n_eff(1e6)={ne}");
+        let ne2 = b2_lj_series_derivs(1e4, 60).neff(1e4);
+        assert!((ne2 - 12.0).abs() < 0.3, "n_eff(1e4)={ne2}");
+    }
+
+    #[test]
+    fn lj_b2_derivs_msmc_matches_integration() {
+        use potter_poc::b2_and_derivs_v;
+        use potter_poc::msmc::msmc_b2_v;
+        let lj = |r: f64| {
+            let s6 = (1.0_f64 / r).powi(6);
+            4.0 * (s6 * s6 - s6)
+        };
+        let t = 2.0;
+        let det = b2_and_derivs_v(&lj, t, 1e-11);
+        let mc = msmc_b2_v(&lj, t, 1.5, 8_000_000, 0xC0FFEE);
+        // value-level agreement (deterministic vs Monte Carlo)
+        assert!(
+            (mc.d.b2 - det.b2).abs() / det.b2.abs() < 0.02,
+            "B2 MSMC {} +/- {} vs integ {}",
+            mc.d.b2,
+            mc.stderr_b2,
+            det.b2
+        );
+        // n_eff agreement — CRN keeps its variance small
+        assert!(
+            (mc.neff - det.neff(t)).abs() < 0.3,
+            "n_eff MSMC {} +/- {} vs integ {}",
+            mc.neff,
+            mc.stderr_neff,
+            det.neff(t)
+        );
+        // CRN sanity: sharing one walk makes the n_eff stderr small
+        assert!(mc.stderr_neff < 0.1, "n_eff stderr too large: {}", mc.stderr_neff);
+    }
+
+    #[test]
+    fn b2_derivs_from_dsl_matches_closure() {
+        use potter_poc::{b2_and_derivs_v, b2_derivs_from_dsl};
+        let lj = |r: f64| {
+            let s6 = (1.0_f64 / r).powi(6);
+            4.0 * (s6 * s6 - s6)
+        };
+        let t = 2.0;
+        let viadsl =
+            b2_derivs_from_dsl("4*eps*((sig/r)**12 - (sig/r)**6)", 1.0, 1.0, t, 1e-12).unwrap();
+        let viaclosure = b2_and_derivs_v(&lj, t, 1e-12);
+        assert!((viadsl.b2 - viaclosure.b2).abs() < 1e-9);
+        assert!((viadsl.db2_dt - viaclosure.db2_dt).abs() < 1e-9);
+        assert!((viadsl.d2b2_dt2 - viaclosure.d2b2_dt2).abs() < 1e-9);
+        assert!((viadsl.neff(t) - viaclosure.neff(t)).abs() < 1e-9);
     }
 }

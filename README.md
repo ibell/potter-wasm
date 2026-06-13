@@ -169,6 +169,10 @@ cargo run --release --bin aot_demo && node node/run-aot.mjs
   built-in correctness check — three hard-sphere diameters agree). MC error is
   ~1/√N *independent of dimension*, so the same sampler scales to B4 (9-D), where
   deterministic cubature does not. This is the crossover the B3 benchmark predicts.
-- Temperature derivatives (dⁿB/dTⁿ) are out of scope here, but note they wrap
-  *around* the potential: V(r) is T-independent, so a generic/arbitrary potential
-  and exact derivatives do not conflict (`num-dual` would supply the autodiff).
+- Temperature derivatives: B2 and its first two T-derivatives are computed by
+  differentiating the Boltzmann factor analytically (V(r) is T-independent) on a
+  single shared adaptive grid, giving the effective repulsive exponent
+  n_eff = -3(B2 + T·B2')/(2T·B2' + T²·B2''). Validated two ways — deterministic
+  integration and single-bond MSMC (common random numbers) — anchored by the LJ
+  high-T limit n_eff -> 12 and by n_eff == n for inverse-power potentials. See
+  `docs/superpowers/specs/2026-06-12-neff-b2-temperature-derivatives-design.md`.
