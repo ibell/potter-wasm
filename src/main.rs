@@ -371,4 +371,24 @@ mod tests {
             assert!((b3(&p, t, 1e-7) - b3_v(&|r| f.v(r), t, 1e-7)).abs() < 1e-6, "B3 T*={t}");
         }
     }
+
+    #[test]
+    fn b2_and_derivs_value_and_fd_first_derivative() {
+        use potter_poc::{b2_and_derivs_v, b2_v};
+        let lj = |r: f64| {
+            let s6 = (1.0_f64 / r).powi(6);
+            4.0 * (s6 * s6 - s6)
+        };
+        let t = 1.5;
+        let d = b2_and_derivs_v(&lj, t, 1e-12);
+        // (a) the B2 component must equal the existing scalar integrator
+        let b2_ref = b2_v(&lj, t, 1e-12);
+        assert!((d.b2 - b2_ref).abs() < 1e-9, "B2 {} vs {}", d.b2, b2_ref);
+        // (b) dB2/dT must match a central finite difference of B2(T)
+        let h = 1e-4;
+        let fd = (b2_v(&lj, t + h, 1e-12) - b2_v(&lj, t - h, 1e-12)) / (2.0 * h);
+        assert!((d.db2_dt - fd).abs() < 1e-5, "dB2/dT {} vs FD {}", d.db2_dt, fd);
+        // (c) n_eff is finite
+        assert!(d.neff(t).is_finite(), "neff not finite: {}", d.neff(t));
+    }
 }
