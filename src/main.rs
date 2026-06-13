@@ -435,6 +435,37 @@ mod tests {
     }
 
     #[test]
+    fn lj_b2_derivs_msmc_matches_integration() {
+        use potter_poc::b2_and_derivs_v;
+        use potter_poc::msmc::msmc_b2_v;
+        let lj = |r: f64| {
+            let s6 = (1.0_f64 / r).powi(6);
+            4.0 * (s6 * s6 - s6)
+        };
+        let t = 2.0;
+        let det = b2_and_derivs_v(&lj, t, 1e-11);
+        let mc = msmc_b2_v(&lj, t, 1.5, 8_000_000, 0xC0FFEE);
+        // value-level agreement (deterministic vs Monte Carlo)
+        assert!(
+            (mc.d.b2 - det.b2).abs() / det.b2.abs() < 0.02,
+            "B2 MSMC {} +/- {} vs integ {}",
+            mc.d.b2,
+            mc.stderr_b2,
+            det.b2
+        );
+        // n_eff agreement — CRN keeps its variance small
+        assert!(
+            (mc.neff - det.neff(t)).abs() < 0.3,
+            "n_eff MSMC {} +/- {} vs integ {}",
+            mc.neff,
+            mc.stderr_neff,
+            det.neff(t)
+        );
+        // CRN sanity: sharing one walk makes the n_eff stderr small
+        assert!(mc.stderr_neff < 0.1, "n_eff stderr too large: {}", mc.stderr_neff);
+    }
+
+    #[test]
     fn b2_derivs_from_dsl_matches_closure() {
         use potter_poc::{b2_and_derivs_v, b2_derivs_from_dsl};
         let lj = |r: f64| {

@@ -15,6 +15,7 @@
 //! sampler does B4 (9-D) where cubature struggles.
 
 use std::f64::consts::PI;
+use crate::physics::B2Derivs;
 
 /// SplitMix64 — a tiny, dependency-free, deterministic PRNG (fine for MC).
 struct Rng {
@@ -282,6 +283,147 @@ pub fn msmc_b3_overlap_v<V: Fn(f64) -> f64>(
     Msmc {
         b3,
         stderr: (var / m as f64).sqrt(),
+        accept: accepts as f64 / nsteps as f64,
+    }
+}
+
+/// MSMC value + first two T-derivatives of B₂ for a spherical potential, computed
+/// from ONE walk (common random numbers): the same sampled configurations feed B₂,
+/// B₂', and B₂'', so their statistical errors are correlated and n_eff (a ratio)
+/// has low variance. Single Mayer bond γ = f(|r|); hard-sphere reference.
+pub struct MsmcB2 {
+    pub d: B2Derivs,
+    pub neff: f64,
+    pub stderr_b2: f64,
+    pub stderr_neff: f64,
+    pub accept: f64,
+}
+
+/// Standard error of the mean from per-block estimates.
+#[inline]
+fn block_stderr(blocks: &[f64]) -> f64 {
+    let m = blocks.len();
+    if m < 2 {
+        return f64::NAN;
+    }
+    let mean = blocks.iter().sum::<f64>() / m as f64;
+    let var = blocks.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (m - 1) as f64;
+    (var / m as f64).sqrt()
+}
+
+/// MSMC estimate of B₂ and its first two T-derivatives for any potential closure.
+/// `nsteps` Metropolis steps sampling one particle (relative position `r2`) with
+/// weight |γ| = |f(|r2|)|; hard-sphere reference of diameter `sigma_hs`;
+/// deterministic given `seed`.
+pub fn msmc_b2_v<V: Fn(f64) -> f64>(
+    v: &V,
+    t: f64,
+    sigma_hs: f64,
+    nsteps: usize,
+    seed: u64,
+) -> MsmcB2 {
+    // per-bond Mayer factor and its two analytic T-derivatives (V is T-independent)
+    let bond = |r: f64| -> (f64, f64, f64) {
+        let vv = v(r);
+        if vv.is_finite() {
+            let e = (-vv / t).exp();
+            let t2 = t * t;
+            (
+                e - 1.0,
+                e * vv / t2,
+                e * (vv * vv / (t2 * t2) - 2.0 * vv / (t2 * t)),
+            )
+        } else {
+            (-1.0, 0.0, 0.0)
+        }
+    };
+    let hs = |r: f64| if r < sigma_hs { -1.0 } else { 0.0 };
+    let b2_hs = (2.0 * PI / 3.0) * sigma_hs.powi(3);
+
+    // start in the support of |gamma|
+    let mut r2 = [1.05, 0.0, 0.0];
+    let (mut g, mut g1, mut g2) = bond(norm(r2));
+    let mut ag = g.abs();
+
+    let mut rng = Rng::new(seed);
+    let delta = 0.5;
+    let equil = nsteps / 10;
+    let nblocks = 50usize;
+    let per = (nsteps - equil).max(nblocks) / nblocks;
+
+    // per-block sums of: sign(g), g1/|g|, g2/|g|, gamma_ref/|g|
+    let mut b_sign = vec![0.0f64; nblocks];
+    let mut b_d1 = vec![0.0f64; nblocks];
+    let mut b_d2 = vec![0.0f64; nblocks];
+    let mut b_ref = vec![0.0f64; nblocks];
+    let mut b_cnt = vec![0usize; nblocks];
+    let mut accepts = 0usize;
+
+    for step in 0..nsteps {
+        let trial = [
+            r2[0] + rng.sym(delta),
+            r2[1] + rng.sym(delta),
+            r2[2] + rng.sym(delta),
+        ];
+        let (gn, gn1, gn2) = bond(norm(trial));
+        let agn = gn.abs();
+        if agn >= ag || rng.unit() < agn / ag {
+            r2 = trial;
+            g = gn;
+            g1 = gn1;
+            g2 = gn2;
+            ag = agn;
+            accepts += 1;
+        }
+        if step >= equil && ag > 0.0 {
+            let b = ((step - equil) / per).min(nblocks - 1);
+            b_sign[b] += g.signum();
+            b_d1[b] += g1 / ag;
+            b_d2[b] += g2 / ag;
+            b_ref[b] += hs(norm(r2)) / ag;
+            b_cnt[b] += 1;
+        }
+    }
+
+    // central values from pooled sums (the per-block count cancels in each ratio);
+    // errors from the spread of per-block estimates (which share the walk -> CRN).
+    let (mut ts, mut t1, mut t2, mut tr) = (0.0, 0.0, 0.0, 0.0);
+    let mut b2_blocks = Vec::new();
+    let mut neff_blocks = Vec::new();
+    for b in 0..nblocks {
+        if b_cnt[b] == 0 || b_ref[b] == 0.0 {
+            continue;
+        }
+        ts += b_sign[b];
+        t1 += b_d1[b];
+        t2 += b_d2[b];
+        tr += b_ref[b];
+        let db = B2Derivs {
+            b2: b2_hs * b_sign[b] / b_ref[b],
+            db2_dt: b2_hs * b_d1[b] / b_ref[b],
+            d2b2_dt2: b2_hs * b_d2[b] / b_ref[b],
+        };
+        b2_blocks.push(db.b2);
+        neff_blocks.push(db.neff(t));
+    }
+    let d = if tr != 0.0 {
+        B2Derivs {
+            b2: b2_hs * ts / tr,
+            db2_dt: b2_hs * t1 / tr,
+            d2b2_dt2: b2_hs * t2 / tr,
+        }
+    } else {
+        B2Derivs {
+            b2: f64::NAN,
+            db2_dt: f64::NAN,
+            d2b2_dt2: f64::NAN,
+        }
+    };
+    MsmcB2 {
+        neff: d.neff(t),
+        d,
+        stderr_b2: block_stderr(&b2_blocks),
+        stderr_neff: block_stderr(&neff_blocks),
         accept: accepts as f64 / nsteps as f64,
     }
 }
