@@ -33,6 +33,11 @@
   .layout { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-start; }
   .layout > div { flex: 1 1 360px; }
   #plots { width: 100%; min-height: 200px; }
+  details.defs { margin: 0 0 14px; }
+  details.defs summary { cursor: pointer; font-size: 13px; color: var(--mut); font-weight: 600; }
+  table.defs { width: auto; margin-top: 8px; }
+  table.defs th, table.defs td { text-align: left; padding: 3px 18px 3px 0; border: 0; font-size: 12.5px; }
+  table.defs th { color: var(--mut); }
 </style>
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 </head>
@@ -44,11 +49,11 @@
      T-independent, the same pass also returns the first two T-derivatives
      (analytically) and the effective repulsive exponent
      n_eff = −3(B₂+T·B₂′)/(2T·B₂′+T²·B₂″).</p>
-  <p class="sub"><b>Reduced units:</b> T* = k<sub>B</sub>T/ε, &nbsp; r* = r/σ, &nbsp;
-     B₂* = B₂/σ³; &nbsp; for Stockmayer (μ*)² = μ²/(4πε₀&thinsp;ε&thinsp;σ³).
-     The plots are in these reduced units when <b>ε = σ = 1</b> (the default). With
-     general ε, σ the inputs/outputs use those physical scales: T in the energy unit
-     of ε (e.g. K), B₂ in σ³ (e.g. Å³); n_eff is dimensionless either way.</p>
+  <p class="sub">Everything is in <b>reduced (dimensionless) units</b> — the model
+     potentials reduce with their own energy scale ε and length scale σ. The axes are
+     the dimensionless groups <b>B₂/σ³</b> vs <b>k<sub>B</sub>T/ε</b>; n_eff is
+     dimensionless. See the definitions below for how each starred quantity maps to a
+     real fluid (ε in J, σ in m, μ in C·m).</p>
 
   <fieldset>
     <legend>potential</legend>
@@ -65,13 +70,12 @@
       <label id="nwrap" hidden>n <input id="nexp" type="number" value="12" min="4" step="1" /></label>
       <label id="mwrap" hidden>m <input id="mexp" type="number" value="6" min="4" step="1" /></label>
       <label id="mu2wrap" hidden>(μ*)² <input id="mu2" type="number" value="2" min="0" step="0.5" /></label>
-      <label>ε <input id="eps" type="number" value="1" step="0.1" /></label>
-      <label>σ <input id="sig" type="number" value="1" step="0.1" /></label>
     </div>
     <div class="row">
       <textarea id="dsl" rows="2" spellcheck="false">4*eps*((sig/r)**12 - (sig/r)**6)</textarea>
       <div class="note">Python-like: <code>+ - * /</code>, <code>**</code> power,
-        <code>exp ln log sqrt sin cos abs pow</code>, variables <code>r</code>, <code>eps</code>, <code>sig</code>.</div>
+        <code>exp ln log sqrt sin cos abs pow</code>, variables <code>r</code>, <code>eps</code>, <code>sig</code>
+        (reduced: <code>eps = sig = 1</code>).</div>
     </div>
   </fieldset>
 
@@ -88,6 +92,18 @@
     </label>
     <button id="go" disabled>Compute B₂(T)</button>
   </fieldset>
+
+  <details class="defs">
+    <summary>reduced-unit definitions</summary>
+    <table class="defs">
+      <tr><th>quantity</th><th>definition</th><th>maps to a real fluid via</th></tr>
+      <tr><td>T*</td><td>k<sub>B</sub>T / ε</td><td>ε in J, T in K (k<sub>B</sub> = 1.380649×10⁻²³ J/K)</td></tr>
+      <tr><td>r*</td><td>r / σ</td><td>σ in m</td></tr>
+      <tr><td>B₂*</td><td>B₂ / σ³</td><td>B₂ in m³</td></tr>
+      <tr><td>(μ*)²</td><td>μ² / (4πε₀&thinsp;ε&thinsp;σ³)</td><td>μ in C·m (1 D = 3.33564×10⁻³⁰ C·m)</td></tr>
+      <tr><td>n_eff</td><td>−3(B₂*+T*B₂*′) / (2T*B₂*′+T*²B₂*″)</td><td>dimensionless</td></tr>
+    </table>
+  </details>
 
   <div id="status">loading wasm…</div>
 
@@ -310,7 +326,7 @@ let runGen = 0; // generation token: a newer run cancels an older in-flight one
 async function compute() {
   const gen = ++runGen;
   const preset = presetSel.value;
-  const eps = parseFloat($("eps").value), sig = parseFloat($("sig").value);
+  const eps = 1, sig = 1; // reduced model potentials: ε = σ = 1 (axes are B₂/σ³ vs k_BT/ε)
   let tmin = parseFloat($("tmin").value), tmax = parseFloat($("tmax").value);
   const np = Math.max(2, parseInt($("npts").value) || 2);
   const log = $("tspace").value === "log";
@@ -354,7 +370,7 @@ async function compute() {
 }
 
 function renderTable(rows, hasExact) {
-  let h = "<table><tr><th>T*</th><th>B₂</th><th>dB₂/dT</th><th>d²B₂/dT²</th>" +
+  let h = "<table><tr><th>k_BT/ε</th><th>B₂/σ³</th><th>dB₂*/dT*</th><th>d²B₂*/dT*²</th>" +
           "<th>n_eff</th>" + (hasExact ? "<th>n_eff*</th>" : "") + "</tr>";
   for (const r of rows) {
     const ne = r.ex ? r.ex.neff : NaN;
@@ -387,7 +403,7 @@ function renderPlotly(rows, hasExact, logX) {
   const BLUE = "#2a6df4", RED = "#e0533d";
   const line = (y, axis) => ({
     x: Ts, y, type: "scatter", mode: "lines", line: { color: BLUE, width: 2 },
-    yaxis: axis, hovertemplate: "T*=%{x:.3g}<br>%{y:.5g}<extra></extra>",
+    yaxis: axis, hovertemplate: "k_BT/ε=%{x:.3g}<br>%{y:.5g}<extra></extra>",
   });
   const dots = (y, axis) => ({
     x: Ts, y, type: "scatter", mode: "markers", marker: { color: RED, size: 6 },
@@ -416,13 +432,13 @@ function renderPlotly(rows, hasExact, logX) {
     height: 660, margin: { l: 72, r: 16, t: 20, b: 44 }, showlegend: false,
     font: { size: 11 }, paper_bgcolor: "#fff", plot_bgcolor: "#fff",
     xaxis: {
-      domain: [0, 1], anchor: "y", title: { text: "T*" },
+      domain: [0, 1], anchor: "y", title: { text: "k_BT/ε" },
       type: logX ? "log" : "linear", ticks: "outside", showline: true, linecolor: "#ddd",
     },
     yaxis: band(0.0, 0.21, "n_eff"),
-    yaxis2: band(0.27, 0.47, "d²B₂/dT²"),
-    yaxis3: band(0.53, 0.73, "dB₂/dT"),
-    yaxis4: band(0.79, 1.0, "B₂"),
+    yaxis2: band(0.27, 0.47, "d²B₂*/dT*²"),
+    yaxis3: band(0.53, 0.73, "dB₂*/dT*"),
+    yaxis4: band(0.79, 1.0, "B₂/σ³"),
   };
   // dashed reference at the repulsive exponent n on the n_eff (bottom) panel —
   // the high-T limit (n_eff -> n). At low T n_eff -> 0, which the curve shows.
@@ -447,7 +463,7 @@ function fallbackCopy(text, done) {
 }
 function copyTable() {
   if (!lastRows.length) return;
-  const cols = ["T*", "B2", "dB2/dT", "d2B2/dT2", "n_eff"];
+  const cols = ["kBT/eps", "B2/sig^3", "dB2*/dT*", "d2B2*/dT*^2", "n_eff"];
   if (lastHasExact) cols.push("n_eff_exact");
   const lines = [cols.join("\t")];
   for (const r of lastRows) {
@@ -473,7 +489,7 @@ function copyTable() {
     $("go").onclick = compute;
     $("copy").onclick = copyTable;
     $("tspace").onchange = compute;
-    for (const id of ["eps", "sig", "tmin", "tmax", "npts"]) $(id).onchange = compute;
+    for (const id of ["tmin", "tmax", "npts"]) $(id).onchange = compute;
     $("status").textContent = "ready.";
     syncPreset();
     compute();
