@@ -43,7 +43,12 @@
      B₂ = −2π ∫₀<sup>∞</sup> (e<sup>−V/T</sup>−1) r² dr. Because V(r) is
      T-independent, the same pass also returns the first two T-derivatives
      (analytically) and the effective repulsive exponent
-     n_eff = −3(B₂+T·B₂′)/(2T·B₂′+T²·B₂″). Reduced units.</p>
+     n_eff = −3(B₂+T·B₂′)/(2T·B₂′+T²·B₂″).</p>
+  <p class="sub"><b>Reduced units:</b> T* = k<sub>B</sub>T/ε, &nbsp; r* = r/σ, &nbsp;
+     B₂* = B₂/σ³; &nbsp; for Stockmayer (μ*)² = μ²/(4πε₀&thinsp;ε&thinsp;σ³).
+     The plots are in these reduced units when <b>ε = σ = 1</b> (the default). With
+     general ε, σ the inputs/outputs use those physical scales: T in the energy unit
+     of ε (e.g. K), B₂ in σ³ (e.g. Å³); n_eff is dimensionless either way.</p>
 
   <fieldset>
     <legend>potential</legend>
