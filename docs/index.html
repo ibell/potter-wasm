@@ -63,6 +63,8 @@
           <option value="lj">Lennard-Jones (12-6)</option>
           <option value="mie">Mie  (n–m)</option>
           <option value="stockmayer">Stockmayer (12-6-3)</option>
+          <option value="exp">EXP  φ₀ e^(−r/r₀)</option>
+          <option value="sw">Square-well (λ)</option>
           <option value="inv">Inverse power  ε(σ/r)ⁿ</option>
           <option value="custom">Custom…</option>
         </select>
@@ -70,6 +72,7 @@
       <label id="nwrap" hidden>n <input id="nexp" type="number" value="12" min="4" step="1" /></label>
       <label id="mwrap" hidden>m <input id="mexp" type="number" value="6" min="4" step="1" /></label>
       <label id="mu2wrap" hidden>(μ*)² <input id="mu2" type="number" value="2" min="0" step="0.5" /></label>
+      <label id="lamwrap" hidden>λ <input id="lam" type="number" value="1.5" min="1.01" step="0.1" /></label>
     </div>
     <div class="row">
       <textarea id="dsl" rows="2" spellcheck="false">4*eps*((sig/r)**12 - (sig/r)**6)</textarea>
@@ -213,16 +216,19 @@ const $ = (id) => document.getElementById(id);
 const presetSel = $("preset"), dslEl = $("dsl");
 const nwrap = $("nwrap"), nexp = $("nexp"), mwrap = $("mwrap"), mexp = $("mexp");
 const mu2wrap = $("mu2wrap"), mu2el = $("mu2");
+const lamwrap = $("lamwrap"), lamel = $("lam");
 
 // Mie (n–m) normalization constant: u = C ε [(σ/r)^n − (σ/r)^m], LJ(12-6) -> C=4.
 const mieC = (n, m) => (n / (n - m)) * (n / m) ** (m / (n - m));
 
 const STOCKMAYER_FORMULA = "4*eps*((sig/r)**12 - (sig/r)**6) - eps*mu2*(sig/r)**3*[2cosθ₁cosθ₂ - sinθ₁sinθ₂cosφ]";
+const SW_FORMULA = "∞ (r<σ),  −ε (σ<r<λσ),  0 (r>λσ)";
 function syncPreset() {
   const p = presetSel.value;
   nwrap.hidden = !(p === "inv" || p === "mie");
   mwrap.hidden = p !== "mie";
   mu2wrap.hidden = p !== "stockmayer";
+  lamwrap.hidden = p !== "sw";
   if (p === "lj") {
     dslEl.value = "4*eps*((sig/r)**12 - (sig/r)**6)"; dslEl.readOnly = true;
   } else if (p === "inv") {
@@ -233,9 +239,14 @@ function syncPreset() {
   } else if (p === "stockmayer") {
     dslEl.value = STOCKMAYER_FORMULA;
     dslEl.readOnly = true; // informational only — computed by 4-D cubature, not the DSL
+  } else if (p === "exp") {
+    dslEl.value = "eps*exp(-r/sig)"; dslEl.readOnly = true; // reduced exp(-r), purely repulsive
+  } else if (p === "sw") {
+    dslEl.value = SW_FORMULA; dslEl.readOnly = true; // informational — closed-form, not the DSL
   } else {
-    // leaving Stockmayer for Custom: its formula is not valid DSL, so seed a default
-    if (dslEl.value === STOCKMAYER_FORMULA) dslEl.value = "4*eps*((sig/r)**12 - (sig/r)**6)";
+    // leaving Stockmayer/SW for Custom: their formula is not valid DSL, so seed a default
+    if (dslEl.value === STOCKMAYER_FORMULA || dslEl.value === SW_FORMULA)
+      dslEl.value = "4*eps*((sig/r)**12 - (sig/r)**6)";
     dslEl.readOnly = false;
   }
 }
@@ -249,6 +260,7 @@ mexp.oninput = () => { if (presetSel.value === "mie") syncPreset(); };
 nexp.onchange = () => { if (presetSel.value === "inv" || presetSel.value === "mie") { syncPreset(); recompute(); } };
 mexp.onchange = () => { if (presetSel.value === "mie") { syncPreset(); recompute(); } };
 mu2el.onchange = () => { if (presetSel.value === "stockmayer") { syncPreset(); recompute(); } };
+lamel.onchange = () => { if (presetSel.value === "sw") recompute(); }; // SW formula is static in λ
 
 // Exact closed-form { b2, db2, d2b2, neff } for a preset, or null for custom.
 function exactFor(T, eps, sig) {
@@ -317,6 +329,15 @@ function computeRow(preset, pot, T, eps, sig) {
     return { T, num: s3 * r.b2, db2: (s3 * r.db2) / eps,
              d2b2: (s3 * r.d2b2) / (eps * eps), neff: r.neff, ex: null };
   }
+  if (preset === "sw") {
+    // Square-well V = ∞ (r<σ), −ε (σ<r<λσ), 0 (r>λσ): closed-form reduced B₂*(T*,λ).
+    const lam = parseFloat($("lam").value) || 1.5;
+    const a = lam ** 3 - 1, u = 1 / T, eu = Math.exp(u), c = (2 * Math.PI) / 3;
+    const b2 = c * (1 - a * (eu - 1));
+    const db2 = c * a * u * u * eu;
+    const d2b2 = -c * a * u ** 3 * eu * (2 + u);
+    return { T, num: b2, db2, d2b2, neff: neffFrom(b2, db2, d2b2, T), ex: null };
+  }
   const d = b2derivs(pot.fn, eps, sig, T);
   return { T, num: d.b2, db2: d.db2, d2b2: d.d2b2, neff: d.neff, ex: exactFor(T, eps, sig) };
 }
@@ -333,7 +354,7 @@ async function compute() {
   if (log && tmin <= 0) tmin = 1e-3;
 
   let pot = null;
-  if (preset !== "stockmayer") {
+  if (preset !== "stockmayer" && preset !== "sw") {
     try { pot = makePotential(dslEl.value); }
     catch (e) { $("status").innerHTML = `<span class="err">✗ ${e.message}</span>`; return; }
   }
