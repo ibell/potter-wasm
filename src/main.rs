@@ -620,6 +620,22 @@ mod tests {
     }
 
     #[test]
+    fn noblegas_b2_neff_dual_t() {
+        use potter_poc::noblegas::argon_tt;
+        let g = argon_tt();
+        let (b2, db2, d2b2, neff) = g.b2_neff(300.0, 3);
+        // b2 from the dual-T path equals the plain b2()
+        assert!((b2 - g.b2(300.0, 3)).abs() / b2.abs() < 1e-9, "b2 {b2}");
+        // dB2/dT matches a central finite difference of b2()
+        let h = 0.5;
+        let fd = (g.b2(300.0 + h, 3) - g.b2(300.0 - h, 3)) / (2.0 * h);
+        assert!((db2 - fd).abs() / fd.abs() < 1e-3, "dB2/dT {db2} vs FD {fd}");
+        // n_eff finite, positive, and consistent with the returned derivatives
+        let chk = -3.0 * (b2 + 300.0 * db2) / (2.0 * 300.0 * db2 + 300.0 * 300.0 * d2b2);
+        assert!(neff.is_finite() && neff > 0.0 && (neff - chk).abs() < 1e-9, "neff {neff}");
+    }
+
+    #[test]
     fn noblegas_v_derivs_match_analytic() {
         use potter_poc::noblegas::argon_tt;
         // Argon at R=0.5 nm (TT branch); analytic reference from integrate_potentials.py
