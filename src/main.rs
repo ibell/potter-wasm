@@ -580,6 +580,17 @@ mod tests {
     }
 
     #[test]
+    fn noblegas_v_derivs_match_analytic() {
+        use potter_poc::noblegas::argon_tt;
+        // Argon at R=0.5 nm (TT branch); analytic reference from integrate_potentials.py
+        let (v, vp, vpp, vppp) = argon_tt().v_derivs(0.5);
+        assert!((v - (-38.818381)).abs() < 1e-4, "V {v}");
+        assert!((vp - 492.757085).abs() / 492.757085 < 1e-6, "V' {vp}");
+        assert!((vpp - (-6719.247296)).abs() / 6719.247296 < 1e-6, "V'' {vpp}");
+        assert!((vppp - 83513.124167).abs() / 83513.124167 < 1e-6, "V''' {vppp}");
+    }
+
+    #[test]
     fn b2_derivs_from_dsl_matches_closure() {
         use potter_poc::{b2_and_derivs_v, b2_derivs_from_dsl};
         let lj = |r: f64| {

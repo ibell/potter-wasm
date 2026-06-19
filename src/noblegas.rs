@@ -78,6 +78,11 @@ impl TangToennies {
     pub fn v(&self, r_nm: f64) -> f64 {
         self.v_full(r_nm)
     }
+
+    /// (V, V', V'', V''') in K/nmᵏ at R [nm], via num-dual third derivative.
+    pub fn v_derivs(&self, r_nm: f64) -> (f64, f64, f64, f64) {
+        num_dual::third_derivative(|r| self.v_full(r), r_nm)
+    }
 }
 
 fn ne() -> TangToennies {
