@@ -566,6 +566,20 @@ mod tests {
     }
 
     #[test]
+    fn noblegas_potential_anchors() {
+        use potter_poc::noblegas::{neon_tt, argon_tt, krypton_tt, xenon_tt};
+        // V/k_B [K] at R [nm] — TT values matching integrate_potentials.py
+        assert!((neon_tt().v(0.16) - 26860.903).abs() / 26860.903 < 1e-4);
+        assert!((neon_tt().v(0.56) - (-1.632)).abs() < 2e-3);
+        assert!((argon_tt().v(0.20) - 51376.994).abs() / 51376.994 < 1e-4);
+        assert!((argon_tt().v(0.9) - (-0.9169)).abs() < 2e-3);
+        assert!((krypton_tt().v(0.24) - 27869.811).abs() / 27869.811 < 1e-4);
+        assert!((krypton_tt().v(1.00) - (-0.9816)).abs() < 2e-3);
+        assert!((xenon_tt().v(0.26) - 37582.271).abs() / 37582.271 < 1e-4);
+        assert!((xenon_tt().v(0.9) - (-4.3452)).abs() < 2e-3);
+    }
+
+    #[test]
     fn b2_derivs_from_dsl_matches_closure() {
         use potter_poc::{b2_and_derivs_v, b2_derivs_from_dsl};
         let lj = |r: f64| {

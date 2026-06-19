@@ -9,6 +9,7 @@ pub mod fastpot;
 pub mod integrate;
 pub mod molecule;
 pub mod msmc;
+pub mod noblegas;
 pub mod physics;
 
 // cranelift emits native machine code, so the JIT backend is native-only.
