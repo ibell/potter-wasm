@@ -543,6 +543,29 @@ mod tests {
     }
 
     #[test]
+    fn num_dual_derivative_api() {
+        use num_dual::{second_derivative, third_derivative, DualNum};
+        // generic f(x) = x^3 - 2x, using the idioms the noble-gas code needs
+        fn f<D: DualNum<f64> + Copy>(x: D) -> D { x.powi(3) - x * 2.0 }
+        // third_derivative -> (value, f', f'', f''')
+        let (v, d1, d2, d3) = third_derivative(f, 2.0);
+        assert!((v - 4.0).abs() < 1e-12);   // 8 - 4
+        assert!((d1 - 10.0).abs() < 1e-12);  // 3x^2 - 2 = 10
+        assert!((d2 - 12.0).abs() < 1e-12);  // 6x
+        assert!((d3 - 6.0).abs() < 1e-12);   // 6
+        // second_derivative -> (value, f', f'')
+        let (v2, e1, e2) = second_derivative(f, 2.0);
+        assert!((v2 - 4.0).abs() < 1e-12);
+        assert!((e1 - 10.0).abs() < 1e-12);
+        assert!((e2 - 12.0).abs() < 1e-12);
+        // exp/recip on a dual: value AND first derivative (pins the derivative path)
+        use num_dual::first_derivative;
+        let (g, dg) = first_derivative(|x: num_dual::Dual64| (-x).exp() * x.recip(), 1.0);
+        assert!((g - std::f64::consts::E.recip()).abs() < 1e-12); // e^{-1}
+        assert!((dg - (-2.0 * std::f64::consts::E.recip())).abs() < 1e-12); // -2/e
+    }
+
+    #[test]
     fn b2_derivs_from_dsl_matches_closure() {
         use potter_poc::{b2_and_derivs_v, b2_derivs_from_dsl};
         let lj = |r: f64| {

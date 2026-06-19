@@ -14,6 +14,7 @@ name = "potter_poc"
 path = "src/main.rs"
 
 [dependencies]
+num-dual = "0.14"
 fasteval = "0.2.4"
 # Pure-Rust libm so the same math (exp/pow/tgamma) links on every target,
 # including wasm32-unknown-unknown which has no system libm.
