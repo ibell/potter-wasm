@@ -6,15 +6,10 @@
 use num_dual::DualNum;
 
 // physical constants (SI), matching integrate_potentials.py
-#[allow(dead_code)]
 const KB: f64 = 1.380649e-23; // J/K
-#[allow(dead_code)]
 const HBAR: f64 = 1.054571817e-34; // J s
-#[allow(dead_code)]
 const U_AMU: f64 = 1.66053906660e-27; // kg
-#[allow(dead_code)]
 const N_A: f64 = 8.314462618 / KB; // 1/mol  (= 6.02214076e23)
-#[allow(dead_code)]
 const PI: f64 = std::f64::consts::PI;
 
 /// A Tang-Toennies noble-gas potential. `V/k_B = A·exp(a1 R + a2 R² + an1/R + an2/R²)
@@ -82,6 +77,76 @@ impl TangToennies {
     /// (V, V', V'', V''') in K/nmᵏ at R [nm], via num-dual third derivative.
     pub fn v_derivs(&self, r_nm: f64) -> (f64, f64, f64, f64) {
         num_dual::third_derivative(|r| self.v_full(r), r_nm)
+    }
+
+    /// Precompute the T-independent grid: per point `[R_m, V_J, V'_{J/m}, V''_{J/m²},
+    /// V'''_{J/m³}]` on a 10000-point log grid in R, [0.01·rε, 1e4·rε] nm.
+    fn grid_potvals(&self) -> Vec<[f64; 5]> {
+        let n = 10000usize;
+        let (lo, hi) = ((0.01 * self.repsilon).ln(), (1e4 * self.repsilon).ln());
+        (0..n)
+            .map(|i| {
+                let r_nm = (lo + (hi - lo) * (i as f64) / ((n - 1) as f64)).exp();
+                let (v, vp, vpp, vppp) = self.v_derivs(r_nm);
+                // SI: R nm→m (×1e-9); V/k_B [K]→J (×KB); each spatial d/dnm → ×1e9
+                [r_nm * 1e-9, v * KB, vp * KB * 1e9, vpp * KB * 1e18, vppp * KB * 1e27]
+            })
+            .collect()
+    }
+
+    /// WK integrand bracket × R² at one grid point (generic over the dual T scalar).
+    /// `order` ∈ {0,1,2,3}. β = 1/(k_B T), λ = ħ²β/(12 m).
+    fn integrand<D: DualNum<f64> + Copy>(&self, pt: &[f64; 5], beta: D, lam: D, order: u8) -> D {
+        let (rm, vj, vp, vpp, vppp) = (pt[0], pt[1], pt[2], pt[3], pt[4]);
+        let e = (-(beta * vj)).exp();
+        let p = beta * vp;
+        let p2 = beta * vpp;
+        let p3 = beta * vppp;
+        let mut g = -(e - 1.0); // order 0 (classical)
+        if order >= 1 {
+            g = g + lam * e * p.powi(2);
+        }
+        if order >= 2 {
+            g = g - lam.powi(2) * e
+                * (p2.powi(2) * (6.0 / 5.0)
+                    + p.powi(2) * (12.0 / (5.0 * rm * rm))
+                    + p.powi(3) * (4.0 / (3.0 * rm))
+                    - p.powi(4) * (1.0 / 6.0));
+        }
+        if order >= 3 {
+            g = g + lam.powi(3) * e
+                * (p3.powi(2) * (36.0 / 35.0)
+                    + p2.powi(2) * (216.0 / (35.0 * rm * rm))
+                    + p2.powi(3) * (24.0 / 21.0)
+                    + p * p2.powi(2) * (24.0 / (5.0 * rm))
+                    + p.powi(3) * (288.0 / (315.0 * rm * rm * rm))
+                    - p.powi(2) * p2.powi(2) * (6.0 / 5.0)
+                    - p.powi(4) * (2.0 / (15.0 * rm * rm))
+                    - p.powi(5) * (2.0 / (5.0 * rm))
+                    + p.powi(6) * (1.0 / 30.0));
+        }
+        g * (rm * rm)
+    }
+
+    /// B₂ [cm³/mol] generic over the dual temperature `t`, integrating the precomputed
+    /// grid by the trapezoidal rule. `order` selects the WK truncation.
+    fn b2_generic<D: DualNum<f64> + Copy>(&self, t: D, order: u8, pv: &[[f64; 5]]) -> D {
+        let m = self.mass_rel * U_AMU;
+        let beta = (t * KB).recip();
+        let lam = beta * (HBAR * HBAR / (12.0 * m));
+        let mut integ = D::from(0.0);
+        for w in pv.windows(2) {
+            let gi = self.integrand(&w[0], beta, lam, order);
+            let gj = self.integrand(&w[1], beta, lam, order);
+            integ = integ + (gi + gj) * (0.5 * (w[1][0] - w[0][0]));
+        }
+        integ * (2.0 * PI * N_A * 1e6)
+    }
+
+    /// B₂ [cm³/mol] at temperature `t` [K], WK truncation `order` (0 = classical).
+    pub fn b2(&self, t: f64, order: u8) -> f64 {
+        let pv = self.grid_potvals();
+        self.b2_generic(t, order, &pv)
     }
 }
 

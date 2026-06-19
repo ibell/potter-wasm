@@ -566,6 +566,25 @@ mod tests {
     }
 
     #[test]
+    fn noblegas_classical_b2() {
+        use potter_poc::noblegas::{neon_tt, argon_tt, krypton_tt, xenon_tt, TangToennies};
+        // classical B2 [cm^3/mol] vs integrate_potentials.py reference
+        let cases: &[(&str, fn() -> TangToennies, [(f64, f64); 4])] = &[
+            ("Ne", neon_tt, [(50.0, -38.5466), (100.0, -4.9747), (300.0, 11.4662), (1000.0, 13.8749)]),
+            ("Ar", argon_tt, [(50.0, -774.1828), (100.0, -183.8396), (300.0, -15.2992), (1000.0, 20.2995)]),
+            ("Kr", krypton_tt, [(50.0, -2507.8925), (100.0, -427.6767), (300.0, -50.2435), (1000.0, 18.5870)]),
+            ("Xe", xenon_tt, [(50.0, -12473.4207), (100.0, -1146.4559), (300.0, -128.5996), (1000.0, 12.2082)]),
+        ];
+        for (nm, ctor, refs) in cases {
+            let g = ctor();
+            for (t, b2ref) in refs {
+                let b2 = g.b2(*t, 0);
+                assert!((b2 - b2ref).abs() / b2ref.abs() < 2e-3, "{nm} T={t}: {b2} vs {b2ref}");
+            }
+        }
+    }
+
+    #[test]
     fn noblegas_potential_anchors() {
         use potter_poc::noblegas::{neon_tt, argon_tt, krypton_tt, xenon_tt};
         // V/k_B [K] at R [nm] — TT values matching integrate_potentials.py
