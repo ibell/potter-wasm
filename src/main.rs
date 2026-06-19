@@ -566,6 +566,27 @@ mod tests {
     }
 
     #[test]
+    fn noblegas_wk3_b2() {
+        use potter_poc::noblegas::{neon_tt, argon_tt, krypton_tt, xenon_tt, TangToennies};
+        // WK order-3 B2 [cm^3/mol] vs integrate_potentials.py reference
+        let cases: &[(&str, fn() -> TangToennies, [(f64, f64); 4])] = &[
+            ("Ne", neon_tt, [(50.0, -36.4805), (100.0, -4.4326), (300.0, 11.5664), (1000.0, 13.8950)]),
+            ("Ar", argon_tt, [(50.0, -756.9259), (100.0, -182.3749), (300.0, -15.1793), (1000.0, 20.3171)]),
+            ("Kr", krypton_tt, [(50.0, -2473.9746), (100.0, -426.1043), (300.0, -50.1607), (1000.0, 18.5973)]),
+            ("Xe", xenon_tt, [(50.0, -12335.0404), (100.0, -1143.5702), (300.0, -128.5143), (1000.0, 12.2166)]),
+        ];
+        for (nm, ctor, refs) in cases {
+            let g = ctor();
+            for (t, b2ref) in refs {
+                let b2 = g.b2(*t, 3);
+                assert!((b2 - b2ref).abs() / b2ref.abs() < 2e-3, "{nm} T={t}: {b2} vs {b2ref}");
+            }
+            // the quantum correction is a real, nonzero shift off classical at low T
+            assert!((g.b2(50.0, 3) - g.b2(50.0, 0)).abs() > 0.0);
+        }
+    }
+
+    #[test]
     fn noblegas_classical_b2() {
         use potter_poc::noblegas::{neon_tt, argon_tt, krypton_tt, xenon_tt, TangToennies};
         // classical B2 [cm^3/mol] vs integrate_potentials.py reference
