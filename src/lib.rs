@@ -10,6 +10,7 @@ pub mod integrate;
 pub mod molecule;
 pub mod msmc;
 pub mod noblegas;
+pub use noblegas::{argon_tt, krypton_tt, neon_tt, xenon_tt, TangToennies};
 pub mod physics;
 
 // cranelift emits native machine code, so the JIT backend is native-only.
