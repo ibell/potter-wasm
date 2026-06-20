@@ -43,6 +43,15 @@
 </head>
 <body>
   <h1>Second virial coefficient B₂(T) — in the browser</h1>
+  <fieldset>
+    <legend>mode</legend>
+    <label>view
+      <select id="mode">
+        <option value="model">Model potentials (reduced)</option>
+        <option value="real">Real fluids (SI)</option>
+      </select>
+    </label>
+  </fieldset>
   <p class="sub">Type a pair potential V(r). It is compiled to a WebAssembly module
      <em>in your browser</em> (AOT) and run natively to integrate
      B₂ = −2π ∫₀<sup>∞</sup> (e<sup>−V/T</sup>−1) r² dr. Because V(r) is
@@ -55,7 +64,7 @@
      dimensionless. See the definitions below for how each starred quantity maps to a
      real fluid (ε in J, σ in m, μ in C·m).</p>
 
-  <fieldset>
+  <fieldset id="modelctl">
     <legend>potential</legend>
     <div class="row">
       <label>preset
@@ -82,7 +91,7 @@
     </div>
   </fieldset>
 
-  <fieldset>
+  <fieldset id="modeltrange">
     <legend>temperature range</legend>
     <label>T*min <input id="tmin" type="number" value="1.3" step="0.1" /></label>
     <label>T*max <input id="tmax" type="number" value="8" step="0.5" /></label>
@@ -95,8 +104,39 @@
     </label>
     <button id="go" disabled>Compute B₂(T)</button>
   </fieldset>
+  <fieldset id="realctl" hidden>
+    <legend>real fluid (noble gas, ab initio Tang–Toennies)</legend>
+    <div class="row">
+      <label>gas
+        <select id="gas">
+          <option value="0">Neon</option>
+          <option value="1" selected>Argon</option>
+          <option value="2">Krypton</option>
+          <option value="3">Xenon</option>
+        </select>
+      </label>
+      <label>WK order
+        <select id="wkorder">
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3" selected>3</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <label>Tmin (K) <input id="rtmin" type="number" value="50" min="1" step="10" /></label>
+      <label>Tmax (K) <input id="rtmax" type="number" value="1000" step="50" /></label>
+      <label>points <input id="rnpts" type="number" value="24" min="2" step="1" /></label>
+      <label>spacing
+        <select id="rtspace"><option value="log">log</option><option value="lin">linear</option></select>
+      </label>
+    </div>
+    <div class="note">B₂ in cm³/mol vs T in K; <b>classical</b> vs
+      <b>Wigner–Kirkwood</b> order-N quantum correction. Potentials: Ne (Bich, MP 2008),
+      Ar (Vogel, MP 2010), Kr (Jäger, JCP 2016), Xe (Hellmann, JCP 2017).</div>
+  </fieldset>
 
-  <details class="defs">
+  <details class="defs" id="modeldefs">
     <summary>reduced-unit definitions</summary>
     <table class="defs">
       <tr><th>quantity</th><th>definition</th><th>maps to a real fluid via</th></tr>
@@ -105,6 +145,17 @@
       <tr><td>B₂*</td><td>B₂ / σ³</td><td>B₂ in m³</td></tr>
       <tr><td>(μ*)²</td><td>μ² / (4πε₀&thinsp;ε&thinsp;σ³)</td><td>μ in C·m (1 D = 3.33564×10⁻³⁰ C·m)</td></tr>
       <tr><td>n_eff</td><td>−3(B₂*+T*B₂*′) / (2T*B₂*′+T*²B₂*″)</td><td>dimensionless</td></tr>
+    </table>
+  </details>
+  <details class="defs" id="realdefs" hidden>
+    <summary>real-fluid definitions</summary>
+    <table class="defs">
+      <tr><th>quantity</th><th>meaning</th></tr>
+      <tr><td>B₂ (cm³/mol)</td><td>second virial coefficient in physical units</td></tr>
+      <tr><td>T (K)</td><td>temperature</td></tr>
+      <tr><td>classical</td><td>B₂ = −2π N_A ∫ (e<sup>−V/k_BT</sup>−1) r² dr</td></tr>
+      <tr><td>Wigner–Kirkwood</td><td>+ ħ²-series quantum correction to order N (grows at low T; largest for Ne)</td></tr>
+      <tr><td>n_eff</td><td>−3(B₂+T·B₂′)/(2T·B₂′+T²·B₂″)</td></tr>
     </table>
   </details>
 
@@ -217,6 +268,8 @@ const presetSel = $("preset"), dslEl = $("dsl");
 const nwrap = $("nwrap"), nexp = $("nexp"), mwrap = $("mwrap"), mexp = $("mexp");
 const mu2wrap = $("mu2wrap"), mu2el = $("mu2");
 const lamwrap = $("lamwrap"), lamel = $("lam");
+const modeSel = $("mode");
+const GAS_NAMES = ["Neon", "Argon", "Krypton", "Xenon"];
 
 // Mie (n–m) normalization constant: u = C ε [(σ/r)^n − (σ/r)^m], LJ(12-6) -> C=4.
 const mieC = (n, m) => (n / (n - m)) * (n / m) ** (m / (n - m));
@@ -249,6 +302,16 @@ function syncPreset() {
       dslEl.value = "4*eps*((sig/r)**12 - (sig/r)**6)";
     dslEl.readOnly = false;
   }
+}
+
+// Show the controls + definitions for the active mode; hide the other surface.
+function syncMode() {
+  const real = modeSel.value === "real";
+  document.getElementById("modelctl").hidden = real;     // reduced potential fieldset
+  document.getElementById("modeltrange").hidden = real;  // reduced T* range fieldset
+  document.getElementById("modeldefs").hidden = real;    // reduced-unit defs
+  $("realctl").hidden = !real;
+  $("realdefs").hidden = !real;
 }
 
 // Recompute on any control change so the inputs feel live (the n/m exponents,
@@ -293,7 +356,7 @@ function repExponent() {
   return NaN;
 }
 
-let lastRows = [], lastHasExact = false; // retained for "Copy table"
+let lastRows = [], lastHasExact = false, lastReal = false; // retained for "Copy table"
 
 // T grid: linear or geometric (log) spacing between tmin and tmax.
 function tGrid(tmin, tmax, np, log) {
@@ -318,6 +381,18 @@ function stockmayerReduced(tstar, mu2, reltol = 1e-3) {
   };
   ex.poc_dealloc(out, 32);
   return r;
+}
+
+// Noble-gas classical + WK row via the poc_noblegas wasm export (cm³/mol, K).
+function noblegasRow(gas, t, order) {
+  const out = ex.poc_alloc(64); // 8 * f64
+  ex.poc_noblegas(gas, t, order, out);
+  const dv = new DataView(ex.memory.buffer);
+  const r = Array.from({ length: 8 }, (_, k) => dv.getFloat64(out + 8 * k, true));
+  ex.poc_dealloc(out, 64);
+  // classical (num/db2/d2b2/neff) + WK curve carried in a parallel `q` field set.
+  return { T: t, num: r[0], db2: r[1], d2b2: r[2], neff: r[3],
+           q: { b2: r[4], db2: r[5], d2b2: r[6], neff: r[7] }, ex: null };
 }
 
 // Build one result row for temperature T with the current preset/params.
@@ -346,48 +421,73 @@ let runGen = 0; // generation token: a newer run cancels an older in-flight one
 
 async function compute() {
   const gen = ++runGen;
-  const preset = presetSel.value;
-  const eps = 1, sig = 1; // reduced model potentials: ε = σ = 1 (axes are B₂/σ³ vs k_BT/ε)
-  let tmin = parseFloat($("tmin").value), tmax = parseFloat($("tmax").value);
-  const np = Math.max(2, parseInt($("npts").value) || 2);
-  const log = $("tspace").value === "log";
-  if (log && tmin <= 0) tmin = 1e-3;
+  const real = modeSel.value === "real";
 
-  let pot = null;
-  if (preset !== "stockmayer" && preset !== "sw") {
-    try { pot = makePotential(dslEl.value); }
-    catch (e) { $("status").innerHTML = `<span class="err">✗ ${e.message}</span>`; return; }
+  // T grid + per-row producer differ by mode; the slicing/cancel loop is shared.
+  let Ts, makeRow, doneMsg, logX;
+  if (real) {
+    const gas = parseInt($("gas").value) || 0, order = parseInt($("wkorder").value) || 3;
+    let tmin = parseFloat($("rtmin").value), tmax = parseFloat($("rtmax").value);
+    const np = Math.max(2, parseInt($("rnpts").value) || 2);
+    const log = $("rtspace").value === "log";
+    if (log && tmin <= 0) tmin = 1;
+    Ts = tGrid(tmin, tmax, np, log);
+    logX = log;
+    makeRow = (T) => noblegasRow(gas, T, order);
+    doneMsg = `✓ ${GAS_NAMES[gas]} — ${np} temperatures (${log ? "log" : "linear"} spacing): ` +
+      `classical and Wigner–Kirkwood order-${order} B₂(T), cm³/mol.`;
+  } else {
+    const preset = presetSel.value, eps = 1, sig = 1;
+    let tmin = parseFloat($("tmin").value), tmax = parseFloat($("tmax").value);
+    const np = Math.max(2, parseInt($("npts").value) || 2);
+    const log = $("tspace").value === "log";
+    if (log && tmin <= 0) tmin = 1e-3;
+    let pot = null;
+    if (preset !== "stockmayer" && preset !== "sw") {
+      try { pot = makePotential(dslEl.value); }
+      catch (e) { $("status").innerHTML = `<span class="err">✗ ${e.message}</span>`; return; }
+    }
+    Ts = tGrid(tmin, tmax, np, log);
+    logX = log;
+    makeRow = (T) => computeRow(preset, pot, T, eps, sig);
+    doneMsg = `✓ ${preset === "stockmayer" ? "Stockmayer 4-D cubature" : "compiled <code>" +
+      dslEl.value.replace(/</g, "&lt;") + "</code>"} — ${np} temperatures ` +
+      `(${log ? "log" : "linear"} spacing): B₂, its first two T-derivatives, and n_eff.`;
   }
 
-  const Ts = tGrid(tmin, tmax, np, log);
   const rows = [];
   let i = 0;
   while (i < Ts.length) {
-    if (gen !== runGen) return; // a newer run started — abandon this one
+    if (gen !== runGen) return;
     const sliceStart = performance.now();
     try {
-      do {
-        rows.push(computeRow(preset, pot, Ts[i], eps, sig));
-        i++;
-      } while (i < Ts.length && performance.now() - sliceStart < 16);
+      do { rows.push(makeRow(Ts[i])); i++; }
+      while (i < Ts.length && performance.now() - sliceStart < 16);
     } catch (e) {
-      $("status").innerHTML = `<span class="err">✗ ${e.message}</span>`;
-      return;
+      $("status").innerHTML = `<span class="err">✗ ${e.message}</span>`; return;
     }
-
     const hasExact = rows.some(r => r.ex);
     lastRows = rows.slice();
     lastHasExact = hasExact;
-    renderTable(rows, hasExact);
-    renderPlotly(rows, hasExact, log);
+    lastReal = real;
+    renderTable(rows, hasExact, real);
+    renderPlotly(rows, hasExact, logX, plotOpts(real));
     $("status").innerHTML = i < Ts.length
       ? `computing ${i}/${Ts.length}…`
-      : `✓ ${preset === "stockmayer" ? "Stockmayer 4-D cubature" : "compiled <code>" +
-          dslEl.value.replace(/</g, "&lt;") + "</code>"} — ${np} temperatures ` +
-        `(${log ? "log" : "linear"} spacing): B₂, its first two T-derivatives, and n_eff.` +
-        (hasExact ? "" : " <span class=note>(no closed-form overlay)</span>");
+      : doneMsg + (!real && !hasExact ? " <span class=note>(no closed-form overlay)</span>" : "");
     if (i < Ts.length) await new Promise(r => setTimeout(r, 0));
   }
+}
+
+// Plotly opts per mode: real = physical labels + a 2nd (WK) curve, no IPL ref line.
+function plotOpts(real) {
+  if (!real) return {}; // reduced defaults
+  return {
+    xlabel: "T (K)", hover: "T",
+    panels: ["B₂ (cm³/mol)", "dB₂/dT (cm³/mol/K)", "d²B₂/dT² (cm³/mol/K²)"],
+    series2: { key: "q", name: "Wigner–Kirkwood", color: "#1a9850", dash: "dot" },
+    ref: false,
+  };
 }
 
 function renderTable(rows, hasExact) {
@@ -532,8 +632,14 @@ function copyTable() {
     $("copy").onclick = copyTable;
     $("tspace").onchange = compute;
     for (const id of ["tmin", "tmax", "npts"]) $(id).onchange = compute;
+    $("mode").onchange = () => { syncMode(); compute(); };
+    $("gas").onchange = () => { if (modeSel.value === "real") compute(); };
+    $("wkorder").onchange = () => { if (modeSel.value === "real") compute(); };
+    for (const id of ["rtmin", "rtmax", "rnpts"]) $(id).onchange = () => { if (modeSel.value === "real") compute(); };
+    $("rtspace").onchange = () => { if (modeSel.value === "real") compute(); };
     $("status").textContent = "ready.";
     syncPreset();
+    syncMode();
     compute();
   } catch (e) {
     $("status").innerHTML = `<span class="err">failed to load wasm: ${e.message}</span>`;
