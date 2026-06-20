@@ -490,7 +490,20 @@ function plotOpts(real) {
   };
 }
 
-function renderTable(rows, hasExact) {
+function renderTable(rows, hasExact, real = false) {
+  if (real) {
+    let h = "<table><tr><th>T (K)</th><th>B₂ cl</th><th>B₂ WK</th>" +
+            "<th>n_eff cl</th><th>n_eff WK</th></tr>";
+    const fmt = (v) => (Number.isFinite(v) ? v.toPrecision(6) : "—");
+    const f3 = (v) => (Number.isFinite(v) ? v.toFixed(3) : "—");
+    for (const r of rows) {
+      h += `<tr><td>${r.T.toFixed(1)}</td><td>${fmt(r.num)}</td><td>${fmt(r.q ? r.q.b2 : NaN)}</td>` +
+           `<td>${f3(r.neff)}</td><td>${f3(r.q ? r.q.neff : NaN)}</td></tr>`;
+    }
+    $("tablewrap").innerHTML = h + "</table>" +
+      "<div class=note>cl = classical, WK = Wigner–Kirkwood; B₂ in cm³/mol.</div>";
+    return;
+  }
   let h = "<table><tr><th>k_BT/ε</th><th>B₂/σ³</th><th>dB₂*/dT*</th><th>d²B₂*/dT*²</th>" +
           "<th>n_eff</th>" + (hasExact ? "<th>n_eff*</th>" : "") + "</tr>";
   for (const r of rows) {
@@ -605,14 +618,20 @@ function fallbackCopy(text, done) {
 }
 function copyTable() {
   if (!lastRows.length) return;
-  const cols = ["kBT/eps", "B2/sig^3", "dB2*/dT*", "d2B2*/dT*^2", "n_eff"];
-  if (lastHasExact) cols.push("n_eff_exact");
-  const lines = [cols.join("\t")];
-  for (const r of lastRows) {
-    const row = [r.T, r.num, r.db2, r.d2b2, r.neff];
-    if (lastHasExact) row.push(r.ex ? r.ex.neff : "");
-    lines.push(row.join("\t"));
+  let cols, rowf;
+  if (lastReal) {
+    cols = ["T_K", "B2_cl_cm3mol", "B2_WK_cm3mol", "dB2dT_cl", "dB2dT_WK", "neff_cl", "neff_WK"];
+    rowf = (r) => [r.T, r.num, r.q ? r.q.b2 : "", r.db2, r.q ? r.q.db2 : "", r.neff, r.q ? r.q.neff : ""];
+  } else {
+    cols = ["kBT/eps", "B2/sig^3", "dB2*/dT*", "d2B2*/dT*^2", "n_eff"];
+    if (lastHasExact) cols.push("n_eff_exact");
+    rowf = (r) => {
+      const row = [r.T, r.num, r.db2, r.d2b2, r.neff];
+      if (lastHasExact) row.push(r.ex ? r.ex.neff : "");
+      return row;
+    };
   }
+  const lines = [cols.join("\t"), ...lastRows.map(r => rowf(r).join("\t"))];
   const text = lines.join("\n");
   const btn = $("copy"), label = btn.textContent;
   const done = () => { btn.textContent = "copied ✓"; setTimeout(() => (btn.textContent = label), 1200); };
