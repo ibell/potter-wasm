@@ -543,6 +543,110 @@ mod tests {
     }
 
     #[test]
+    fn num_dual_derivative_api() {
+        use num_dual::{second_derivative, third_derivative, DualNum};
+        // generic f(x) = x^3 - 2x, using the idioms the noble-gas code needs
+        fn f<D: DualNum<f64> + Copy>(x: D) -> D { x.powi(3) - x * 2.0 }
+        // third_derivative -> (value, f', f'', f''')
+        let (v, d1, d2, d3) = third_derivative(f, 2.0);
+        assert!((v - 4.0).abs() < 1e-12);   // 8 - 4
+        assert!((d1 - 10.0).abs() < 1e-12);  // 3x^2 - 2 = 10
+        assert!((d2 - 12.0).abs() < 1e-12);  // 6x
+        assert!((d3 - 6.0).abs() < 1e-12);   // 6
+        // second_derivative -> (value, f', f'')
+        let (v2, e1, e2) = second_derivative(f, 2.0);
+        assert!((v2 - 4.0).abs() < 1e-12);
+        assert!((e1 - 10.0).abs() < 1e-12);
+        assert!((e2 - 12.0).abs() < 1e-12);
+        // exp/recip on a dual: value AND first derivative (pins the derivative path)
+        use num_dual::first_derivative;
+        let (g, dg) = first_derivative(|x: num_dual::Dual64| (-x).exp() * x.recip(), 1.0);
+        assert!((g - std::f64::consts::E.recip()).abs() < 1e-12); // e^{-1}
+        assert!((dg - (-2.0 * std::f64::consts::E.recip())).abs() < 1e-12); // -2/e
+    }
+
+    #[test]
+    fn noblegas_wk3_b2() {
+        use potter_poc::noblegas::{neon_tt, argon_tt, krypton_tt, xenon_tt, TangToennies};
+        // WK order-3 B2 [cm^3/mol] vs integrate_potentials.py reference
+        let cases: &[(&str, fn() -> TangToennies, [(f64, f64); 4])] = &[
+            ("Ne", neon_tt, [(50.0, -36.4805), (100.0, -4.4326), (300.0, 11.5664), (1000.0, 13.8950)]),
+            ("Ar", argon_tt, [(50.0, -756.9259), (100.0, -182.3749), (300.0, -15.1793), (1000.0, 20.3171)]),
+            ("Kr", krypton_tt, [(50.0, -2473.9746), (100.0, -426.1043), (300.0, -50.1607), (1000.0, 18.5973)]),
+            ("Xe", xenon_tt, [(50.0, -12335.0404), (100.0, -1143.5702), (300.0, -128.5143), (1000.0, 12.2166)]),
+        ];
+        for (nm, ctor, refs) in cases {
+            let g = ctor();
+            for (t, b2ref) in refs {
+                let b2 = g.b2(*t, 3);
+                assert!((b2 - b2ref).abs() / b2ref.abs() < 2e-3, "{nm} T={t}: {b2} vs {b2ref}");
+            }
+            // the quantum correction is a real, nonzero shift off classical at low T
+            assert!((g.b2(50.0, 3) - g.b2(50.0, 0)).abs() > 0.0);
+        }
+    }
+
+    #[test]
+    fn noblegas_classical_b2() {
+        use potter_poc::noblegas::{neon_tt, argon_tt, krypton_tt, xenon_tt, TangToennies};
+        // classical B2 [cm^3/mol] vs integrate_potentials.py reference
+        let cases: &[(&str, fn() -> TangToennies, [(f64, f64); 4])] = &[
+            ("Ne", neon_tt, [(50.0, -38.5466), (100.0, -4.9747), (300.0, 11.4662), (1000.0, 13.8749)]),
+            ("Ar", argon_tt, [(50.0, -774.1828), (100.0, -183.8396), (300.0, -15.2992), (1000.0, 20.2995)]),
+            ("Kr", krypton_tt, [(50.0, -2507.8925), (100.0, -427.6767), (300.0, -50.2435), (1000.0, 18.5870)]),
+            ("Xe", xenon_tt, [(50.0, -12473.4207), (100.0, -1146.4559), (300.0, -128.5996), (1000.0, 12.2082)]),
+        ];
+        for (nm, ctor, refs) in cases {
+            let g = ctor();
+            for (t, b2ref) in refs {
+                let b2 = g.b2(*t, 0);
+                assert!((b2 - b2ref).abs() / b2ref.abs() < 2e-3, "{nm} T={t}: {b2} vs {b2ref}");
+            }
+        }
+    }
+
+    #[test]
+    fn noblegas_potential_anchors() {
+        use potter_poc::noblegas::{neon_tt, argon_tt, krypton_tt, xenon_tt};
+        // V/k_B [K] at R [nm] — TT values matching integrate_potentials.py
+        assert!((neon_tt().v(0.16) - 26860.903).abs() / 26860.903 < 1e-4);
+        assert!((neon_tt().v(0.56) - (-1.632)).abs() < 2e-3);
+        assert!((argon_tt().v(0.20) - 51376.994).abs() / 51376.994 < 1e-4);
+        assert!((argon_tt().v(0.9) - (-0.9169)).abs() < 2e-3);
+        assert!((krypton_tt().v(0.24) - 27869.811).abs() / 27869.811 < 1e-4);
+        assert!((krypton_tt().v(1.00) - (-0.9816)).abs() < 2e-3);
+        assert!((xenon_tt().v(0.26) - 37582.271).abs() / 37582.271 < 1e-4);
+        assert!((xenon_tt().v(0.9) - (-4.3452)).abs() < 2e-3);
+    }
+
+    #[test]
+    fn noblegas_b2_neff_dual_t() {
+        use potter_poc::noblegas::argon_tt;
+        let g = argon_tt();
+        let (b2, db2, d2b2, neff) = g.b2_neff(300.0, 3);
+        // b2 from the dual-T path equals the plain b2()
+        assert!((b2 - g.b2(300.0, 3)).abs() / b2.abs() < 1e-9, "b2 {b2}");
+        // dB2/dT matches a central finite difference of b2()
+        let h = 0.5;
+        let fd = (g.b2(300.0 + h, 3) - g.b2(300.0 - h, 3)) / (2.0 * h);
+        assert!((db2 - fd).abs() / fd.abs() < 1e-3, "dB2/dT {db2} vs FD {fd}");
+        // n_eff finite, positive, and consistent with the returned derivatives
+        let chk = -3.0 * (b2 + 300.0 * db2) / (2.0 * 300.0 * db2 + 300.0 * 300.0 * d2b2);
+        assert!(neff.is_finite() && neff > 0.0 && (neff - chk).abs() < 1e-9, "neff {neff}");
+    }
+
+    #[test]
+    fn noblegas_v_derivs_match_analytic() {
+        use potter_poc::noblegas::argon_tt;
+        // Argon at R=0.5 nm (TT branch); analytic reference from integrate_potentials.py
+        let (v, vp, vpp, vppp) = argon_tt().v_derivs(0.5);
+        assert!((v - (-38.818381)).abs() < 1e-4, "V {v}");
+        assert!((vp - 492.757085).abs() / 492.757085 < 1e-6, "V' {vp}");
+        assert!((vpp - (-6719.247296)).abs() / 6719.247296 < 1e-6, "V'' {vpp}");
+        assert!((vppp - 83513.124167).abs() / 83513.124167 < 1e-6, "V''' {vppp}");
+    }
+
+    #[test]
     fn b2_derivs_from_dsl_matches_closure() {
         use potter_poc::{b2_and_derivs_v, b2_derivs_from_dsl};
         let lj = |r: f64| {
