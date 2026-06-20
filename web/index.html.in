@@ -410,8 +410,11 @@ function renderTable(rows, hasExact) {
 }
 
 // Four vertically-stacked subplots (B₂, dB₂/dT, d²B₂/dT², n_eff) sharing the T
-// axis, drawn with Plotly. Numeric = blue line, exact (presets) = red markers.
-function renderPlotly(rows, hasExact, logX) {
+// axis. opts (defaults = reduced model-potential mode):
+//   xlabel, panels:[B₂,dB₂,d²B₂] titles (n_eff is fixed), hover (x label),
+//   series2: null | {key, name, color, dash} for a second line per panel,
+//   ref: bool (draw the n=repExponent() dashed high-T reference on n_eff).
+function renderPlotly(rows, hasExact, logX, opts = {}) {
   const host = $("plots");
   if (!host) return;
   if (typeof Plotly === "undefined") {
@@ -420,11 +423,20 @@ function renderPlotly(rows, hasExact, logX) {
       "“Copy table” still work.</div>";
     return;
   }
+  const o = {
+    xlabel: "k_BT/ε",
+    panels: ["B₂/σ³", "dB₂*/dT*", "d²B₂*/dT*²"],
+    hover: "k_BT/ε",
+    series2: null,
+    ref: true,
+    ...opts,
+  };
   const Ts = rows.map(r => r.T);
   const BLUE = "#2a6df4", RED = "#e0533d";
-  const line = (y, axis) => ({
-    x: Ts, y, type: "scatter", mode: "lines", line: { color: BLUE, width: 2 },
-    yaxis: axis, hovertemplate: "k_BT/ε=%{x:.3g}<br>%{y:.5g}<extra></extra>",
+  const line = (y, axis, color, dash) => ({
+    x: Ts, y, type: "scatter", mode: "lines",
+    line: { color: color || BLUE, width: 2, dash: dash || "solid" },
+    yaxis: axis, hovertemplate: `${o.hover}=%{x:.3g}<br>%{y:.5g}<extra></extra>`,
   });
   const dots = (y, axis) => ({
     x: Ts, y, type: "scatter", mode: "markers", marker: { color: RED, size: 6 },
@@ -443,6 +455,13 @@ function renderPlotly(rows, hasExact, logX) {
     traces.push(dots(rows.map(r => (r.ex ? r.ex.d2b2 : null)), "y2"));
     traces.push(dots(rows.map(r => (r.ex ? r.ex.neff : null)), "y"));
   }
+  if (o.series2) {
+    const k = o.series2.key, c = o.series2.color, d = o.series2.dash || "dot";
+    traces[0].name = "classical"; // blue series gets a legend name
+    const s = (sel, axis) => { const t = line(rows.map(r => (r[k] ? r[k][sel] : null)), axis, c, d);
+      t.name = o.series2.name; return t; };
+    traces.push(s("b2", "y4"), s("db2", "y3"), s("d2b2", "y2"), s("neff", "y"));
+  }
 
   const band = (lo, hi, title) => ({
     domain: [lo, hi], title: { text: title, font: { size: 12 } }, zeroline: true,
@@ -450,26 +469,28 @@ function renderPlotly(rows, hasExact, logX) {
     showline: true, linecolor: "#ddd",
   });
   const layout = {
-    height: 660, margin: { l: 72, r: 16, t: 20, b: 44 }, showlegend: false,
+    height: 660, margin: { l: 72, r: 16, t: 20, b: 44 }, showlegend: !!o.series2,
+    legend: { orientation: "h", y: 1.02, x: 0 },
     font: { size: 11 }, paper_bgcolor: "#fff", plot_bgcolor: "#fff",
     xaxis: {
-      domain: [0, 1], anchor: "y", title: { text: "k_BT/ε" },
+      domain: [0, 1], anchor: "y", title: { text: o.xlabel },
       type: logX ? "log" : "linear", ticks: "outside", showline: true, linecolor: "#ddd",
     },
     yaxis: band(0.0, 0.21, "n_eff"),
-    yaxis2: band(0.27, 0.47, "d²B₂*/dT*²"),
-    yaxis3: band(0.53, 0.73, "dB₂*/dT*"),
-    yaxis4: band(0.79, 1.0, "B₂/σ³"),
+    yaxis2: band(0.27, 0.47, o.panels[2]),
+    yaxis3: band(0.53, 0.73, o.panels[1]),
+    yaxis4: band(0.79, 1.0, o.panels[0]),
   };
-  // dashed reference at the repulsive exponent n on the n_eff (bottom) panel —
-  // the high-T limit (n_eff -> n). At low T n_eff -> 0, which the curve shows.
-  const ref = repExponent();
-  if (Number.isFinite(ref)) {
-    layout.shapes = [{ type: "line", xref: "paper", x0: 0, x1: 1, yref: "y", y0: ref, y1: ref,
-      line: { color: "#bbb", width: 1, dash: "dash" } }];
-    layout.annotations = [{ xref: "paper", x: 0.012, yref: "y", y: ref,
-      text: "n = " + ref + " (high-T limit)", showarrow: false,
-      font: { size: 10, color: "#999" }, xanchor: "left", yanchor: "bottom" }];
+  if (o.ref) {
+    // dashed reference at the repulsive exponent n on the n_eff (bottom) panel.
+    const ref = repExponent();
+    if (Number.isFinite(ref)) {
+      layout.shapes = [{ type: "line", xref: "paper", x0: 0, x1: 1, yref: "y", y0: ref, y1: ref,
+        line: { color: "#bbb", width: 1, dash: "dash" } }];
+      layout.annotations = [{ xref: "paper", x: 0.012, yref: "y", y: ref,
+        text: "n = " + ref + " (high-T limit)", showarrow: false,
+        font: { size: 10, color: "#999" }, xanchor: "left", yanchor: "bottom" }];
+    }
   }
   Plotly.react(host, traces, layout, { displayModeBar: false, responsive: true });
 }
