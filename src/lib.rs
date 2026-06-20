@@ -51,6 +51,24 @@ pub fn stockmayer_b2_derivs(tstar: f64, mu2: f64, reltol: f64) -> B2Derivs {
     sm.b2_and_derivs(tstar, reltol).0
 }
 
+/// Noble-gas B₂ in physical units (cm³/mol, K): classical (order 0) and WK-order-N.
+/// `gas`: 0=Ne 1=Ar 2=Kr 3=Xe. Returns
+/// `[b2_cl, db2dT_cl, d2b2dT2_cl, neff_cl,  b2_q, db2dT_q, d2b2dT2_q, neff_q]`.
+/// One grid build serves both curves.
+pub fn noblegas_b2_neff(gas: u32, t: f64, order: u8) -> [f64; 8] {
+    use crate::noblegas::{argon_tt, krypton_tt, neon_tt, xenon_tt};
+    let g = match gas {
+        0 => neon_tt(),
+        1 => argon_tt(),
+        2 => krypton_tt(),
+        _ => xenon_tt(),
+    };
+    let pv = g.grid();
+    let (b0, d0, e0, n0) = g.b2_neff_with_grid(t, 0, &pv);
+    let (bq, dq, eq, nq) = g.b2_neff_with_grid(t, order, &pv);
+    [b0, d0, e0, n0, bq, dq, eq, nq]
+}
+
 /// Compile a DSL potential string and compute B3 at temperature `t`.
 pub fn b3_from_dsl(src: &str, eps: f64, sig: f64, t: f64, tol: f64) -> Result<f64, String> {
     let pot = Potential::compile(src, eps, sig)?;
@@ -61,7 +79,7 @@ pub fn b3_from_dsl(src: &str, eps: f64, sig: f64, t: f64, tol: f64) -> Result<f6
 /// linear memory via `poc_alloc`, then calls `poc_b2` / `poc_b3`.
 #[cfg(target_arch = "wasm32")]
 mod wasm_exports {
-    use super::{b2_derivs_from_dsl, b2_from_dsl, b3_from_dsl, stockmayer_b2_derivs};
+    use super::{b2_derivs_from_dsl, b2_from_dsl, b3_from_dsl, noblegas_b2_neff, stockmayer_b2_derivs};
     use std::alloc::{alloc, dealloc, Layout};
 
     #[no_mangle]
@@ -137,6 +155,20 @@ mod wasm_exports {
     pub extern "C" fn poc_stockmayer(tstar: f64, mu2: f64, reltol: f64, out: *mut f64) {
         let d = stockmayer_b2_derivs(tstar, mu2, reltol);
         let vals = [d.b2, d.db2_dt, d.d2b2_dt2, d.neff(tstar)];
+        unsafe {
+            for (k, v) in vals.iter().enumerate() {
+                out.add(k).write_unaligned(*v);
+            }
+        }
+    }
+
+    /// Noble-gas classical + WK-order-N B₂ in physical units (cm³/mol, K). Writes
+    /// 8 f64 into `out`: [b2_cl,db2dT_cl,d2b2dT2_cl,neff_cl, b2_q,db2dT_q,d2b2dT2_q,neff_q].
+    /// `gas`: 0=Ne 1=Ar 2=Kr 3=Xe. `order`: WK truncation for the quantum curve.
+    /// Unaligned writes so `out` need not be 8-byte aligned.
+    #[no_mangle]
+    pub extern "C" fn poc_noblegas(gas: u32, t: f64, order: u32, out: *mut f64) {
+        let vals = noblegas_b2_neff(gas, t, order as u8);
         unsafe {
             for (k, v) in vals.iter().enumerate() {
                 out.add(k).write_unaligned(*v);
