@@ -14,6 +14,7 @@
   fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin: 0 0 14px; }
   legend { font-weight: 600; font-size: 13px; padding: 0 6px; }
   label { display: inline-block; margin-right: 14px; font-size: 13px; }
+  label[hidden] { display: none; } /* author rule: `label{display}` else overrides UA [hidden] */
   input, select, textarea { font: inherit; padding: 4px 6px; border: 1px solid #bbb; border-radius: 5px; }
   input[type=number] { width: 72px; }
   textarea { width: 100%; font-family: ui-monospace, Menlo, monospace; font-size: 13px; margin-top: 6px; }
@@ -65,11 +66,13 @@
        dimensionless. See the definitions below for how each starred quantity maps to a
        real fluid (ε in J, σ in m, μ in C·m).</p>
   </div>
-  <p class="sub" id="realintro" hidden>Second virial coefficient of a <b>real noble gas</b>
-     (Ne, Ar, Kr, Xe) from an <b>ab initio Tang–Toennies</b> pair potential, in
-     <b>physical units</b>: B₂ in cm³/mol vs T in K. Each temperature shows the
-     <b>classical</b> value and the <b>Wigner–Kirkwood</b> ħ²-series quantum correction
-     (to the chosen order); the same pass gives the T-derivatives and
+  <p class="sub" id="realintro" hidden>Second virial coefficient of a <b>real fluid</b> in
+     <b>physical units</b> (B₂ in cm³/mol vs T in K): noble gases (Ne–Xe) from ab initio
+     Tang–Toennies pair potentials, and the molecules N₂/CO₂ via a 4-D orientational
+     average of empirical (TraPPE/EPM2) or ab initio (Hellmann) potentials. Each
+     temperature shows the <b>classical</b> B₂ and an ħ²-series <b>quantum correction</b>
+     (Wigner–Kirkwood for the noble gases, QFH for the Hellmann molecules; empirical
+     molecules are classical only); the same pass gives the T-derivatives and
      n_eff = −3(B₂+T·B₂′)/(2T·B₂′+T²·B₂″).</p>
 
   <fieldset id="modelctl">
@@ -113,17 +116,25 @@
     <button id="go" disabled>Compute B₂(T)</button>
   </fieldset>
   <fieldset id="realctl" hidden>
-    <legend>real fluid (noble gas, ab initio Tang–Toennies)</legend>
+    <legend>real fluid — ab initio &amp; empirical pair potentials</legend>
     <div class="row">
-      <label>gas
-        <select id="gas">
-          <option value="0">Neon</option>
-          <option value="1" selected>Argon</option>
-          <option value="2">Krypton</option>
-          <option value="3">Xenon</option>
+      <label>species
+        <select id="species">
+          <optgroup label="Noble gases (Tang–Toennies, ab initio)">
+            <option value="noble:0">Neon</option>
+            <option value="noble:1" selected>Argon</option>
+            <option value="noble:2">Krypton</option>
+            <option value="noble:3">Xenon</option>
+          </optgroup>
+          <optgroup label="Molecules (4-D orientational, slower)">
+            <option value="mol:0">N₂ — TraPPE (empirical)</option>
+            <option value="mol:1">CO₂ — EPM2 (empirical)</option>
+            <option value="mol:2">N₂ — Hellmann (ab initio)</option>
+            <option value="mol:3">CO₂ — Hellmann (ab initio)</option>
+          </optgroup>
         </select>
       </label>
-      <label>WK order
+      <label id="wkorderwrap">WK order
         <select id="wkorder">
           <option value="1">1</option>
           <option value="2">2</option>
@@ -139,12 +150,17 @@
         <select id="rtspace"><option value="log">log</option><option value="lin">linear</option></select>
       </label>
     </div>
-    <div class="note">B₂ in cm³/mol vs T in K; <b>classical</b> vs
-      <b>Wigner–Kirkwood</b> order-N quantum correction. Potentials:
+    <div class="note">B₂ in cm³/mol vs T in K; <b>classical</b> vs a quantum correction
+      (noble gases: Wigner–Kirkwood; Hellmann molecules: QFH; empirical molecules:
+      classical only). Potentials:
       Ne (<a href="https://doi.org/10.1080/00268970801964207" target="_blank" rel="noopener">Bich, MP 2008</a>),
       Ar (<a href="https://doi.org/10.1080/00268976.2010.507557" target="_blank" rel="noopener">Vogel, MP 2010</a>),
       Kr (<a href="https://doi.org/10.1063/1.4943959" target="_blank" rel="noopener">Jäger, JCP 2016</a>),
-      Xe (<a href="https://doi.org/10.1063/1.4994267" target="_blank" rel="noopener">Hellmann, JCP 2017</a>).</div>
+      Xe (<a href="https://doi.org/10.1063/1.4994267" target="_blank" rel="noopener">Hellmann, JCP 2017</a>);
+      N₂/CO₂ Hellmann (<a href="https://doi.org/10.1016/j.cplett.2007.11.030" target="_blank" rel="noopener">MP 2008</a> /
+      <a href="https://doi.org/10.1016/j.cplett.2014.05.022" target="_blank" rel="noopener">CPL 2014</a>),
+      TraPPE / EPM2 empirical.
+      Molecules use fewer points (4-D cubature is heavier).</div>
   </fieldset>
 
   <details class="defs" id="modeldefs">
@@ -325,6 +341,18 @@ function syncMode() {
   $("realintro").hidden = !real;   // real-fluid intro paragraph
   $("realctl").hidden = !real;
   $("realdefs").hidden = !real;
+  if (real) syncSpecies();
+}
+
+// The WK-order control applies only to the noble gases (molecules use a fixed-form
+// quantum correction). Molecules are 4-D and heavy, so cap the default point count.
+function syncSpecies() {
+  const mol = ($("species").value || "").startsWith("mol");
+  $("wkorderwrap").hidden = mol;
+  if (mol) {
+    const np = parseInt($("rnpts").value) || 24;
+    if (np > 14) $("rnpts").value = 12; // keep the heavier 4-D sweep responsive
+  }
 }
 
 // Recompute on any control change so the inputs feel live (the n/m exponents,
@@ -370,6 +398,7 @@ function repExponent() {
 }
 
 let lastRows = [], lastHasExact = false, lastReal = false; // retained for "Copy table"
+let lastQLabel = null; // quantum-curve method label for the active real-fluid species
 
 // T grid: linear or geometric (log) spacing between tmin and tmax.
 function tGrid(tmin, tmax, np, log) {
@@ -408,6 +437,29 @@ function noblegasRow(gas, t, order) {
            q: { b2: r[4], db2: r[5], d2b2: r[6], neff: r[7] }, ex: null };
 }
 
+// Molecule classical + quantum (QFH for Hellmann models) row via poc_molecule.
+function moleculeRow(mol, t) {
+  const out = ex.poc_alloc(64); // 8 * f64
+  ex.poc_molecule(mol, t, 1e-3, out); // reltol 1e-3 (the validated web tolerance)
+  const dv = new DataView(ex.memory.buffer);
+  const r = Array.from({ length: 8 }, (_, k) => dv.getFloat64(out + 8 * k, true));
+  ex.poc_dealloc(out, 64);
+  // quantum slots are NaN for the empirical (classical-only) models -> q = null.
+  const hasQ = Number.isFinite(r[4]);
+  return { T: t, num: r[0], db2: r[1], d2b2: r[2], neff: r[3],
+           q: hasQ ? { b2: r[4], db2: r[5], d2b2: r[6], neff: r[7] } : null, ex: null };
+}
+
+// Parse the species <select> ("noble:id" | "mol:id") -> dispatch info.
+const MOL_NAMES = ["N₂ (TraPPE)", "CO₂ (EPM2)", "N₂ (Hellmann)", "CO₂ (Hellmann)"];
+function speciesInfo() {
+  const [kind, idStr] = ($("species").value || "noble:1").split(":");
+  const id = parseInt(idStr) || 0;
+  if (kind === "mol")
+    return { kind, id, name: MOL_NAMES[id], qLabel: id >= 2 ? "QFH" : null };
+  return { kind: "noble", id, name: GAS_NAMES[id], qLabel: "Wigner–Kirkwood" };
+}
+
 // Build one result row for temperature T with the current preset/params.
 function computeRow(preset, pot, T, eps, sig) {
   if (preset === "stockmayer") {
@@ -439,16 +491,23 @@ async function compute() {
   // T grid + per-row producer differ by mode; the slicing/cancel loop is shared.
   let Ts, makeRow, doneMsg, logX;
   if (real) {
-    const gas = parseInt($("gas").value) || 0, order = parseInt($("wkorder").value) || 3;
+    const sp = speciesInfo();
     let tmin = parseFloat($("rtmin").value), tmax = parseFloat($("rtmax").value);
     const np = Math.max(2, parseInt($("rnpts").value) || 2);
     const log = $("rtspace").value === "log";
     if (log && tmin <= 0) tmin = 1;
     Ts = tGrid(tmin, tmax, np, log);
     logX = log;
-    makeRow = (T) => noblegasRow(gas, T, order);
-    doneMsg = `✓ ${GAS_NAMES[gas]} — ${np} temperatures (${log ? "log" : "linear"} spacing): ` +
-      `classical and Wigner–Kirkwood order-${order} B₂(T), cm³/mol.`;
+    lastQLabel = sp.qLabel;
+    if (sp.kind === "mol") {
+      makeRow = (T) => moleculeRow(sp.id, T);
+    } else {
+      const order = parseInt($("wkorder").value) || 3;
+      makeRow = (T) => noblegasRow(sp.id, T, order);
+    }
+    const qdesc = sp.qLabel ? `classical and ${sp.qLabel}` : "classical";
+    doneMsg = `✓ ${sp.name} — ${np} temperatures (${log ? "log" : "linear"} spacing): ` +
+      `${qdesc} B₂(T), cm³/mol.`;
   } else {
     const preset = presetSel.value, eps = 1, sig = 1;
     let tmin = parseFloat($("tmin").value), tmax = parseFloat($("tmax").value);
@@ -492,21 +551,24 @@ async function compute() {
   }
 }
 
-// Plotly opts per mode: real = physical labels + a 2nd (WK) curve, no IPL ref line.
+// Plotly opts per mode: real = physical labels + (when a quantum curve exists for
+// the species) a 2nd line labeled by method (WK / QFH); no IPL ref line.
 function plotOpts(real) {
   if (!real) return {}; // reduced defaults
-  return {
+  const o = {
     xlabel: "T (K)", hover: "T",
     panels: ["B₂ (cm³/mol)", "dB₂/dT (cm³/mol/K)", "d²B₂/dT² (cm³/mol/K²)"],
-    series2: { key: "q", name: "Wigner–Kirkwood", color: "#1a9850", dash: "dot" },
     ref: false,
   };
+  if (lastQLabel) o.series2 = { key: "q", name: lastQLabel, color: "#1a9850", dash: "dot" };
+  return o;
 }
 
 function renderTable(rows, hasExact, real = false) {
   if (real) {
-    let h = "<table><tr><th>T (K)</th><th>B₂ cl (cm³/mol)</th><th>B₂ WK (cm³/mol)</th>" +
-            "<th>n_eff cl</th><th>n_eff WK</th></tr>";
+    const ql = lastQLabel || "quantum";
+    let h = "<table><tr><th>T (K)</th><th>B₂ cl (cm³/mol)</th><th>B₂ " + ql + " (cm³/mol)</th>" +
+            "<th>n_eff cl</th><th>n_eff " + ql + "</th></tr>";
     const fmt = (v) => (Number.isFinite(v) ? v.toPrecision(6) : "—");
     const f3 = (v) => (Number.isFinite(v) ? v.toFixed(3) : "—");
     for (const r of rows) {
@@ -514,7 +576,8 @@ function renderTable(rows, hasExact, real = false) {
            `<td>${f3(r.neff)}</td><td>${f3(r.q ? r.q.neff : NaN)}</td></tr>`;
     }
     $("tablewrap").innerHTML = h + "</table>" +
-      "<div class=note>cl = classical, WK = Wigner–Kirkwood; B₂ in cm³/mol.</div>";
+      `<div class=note>cl = classical, ${ql} = quantum correction; B₂ in cm³/mol. ` +
+      `(empirical molecules: classical only).</div>`;
     return;
   }
   let h = "<table><tr><th>k_BT/ε</th><th>B₂/σ³</th><th>dB₂*/dT*</th><th>d²B₂*/dT*²</th>" +
@@ -638,7 +701,8 @@ function copyTable() {
   if (!lastRows.length) return;
   let cols, rowf;
   if (lastReal) {
-    cols = ["T_K", "B2_cl_cm3mol", "B2_WK_cm3mol", "dB2dT_cl", "dB2dT_WK", "neff_cl", "neff_WK"];
+    const q = lastQLabel === "QFH" ? "QFH" : lastQLabel ? "WK" : "q";
+    cols = ["T_K", "B2_cl_cm3mol", `B2_${q}_cm3mol`, "dB2dT_cl", `dB2dT_${q}`, "neff_cl", `neff_${q}`];
     rowf = (r) => [r.T, r.num, r.q ? r.q.b2 : "", r.db2, r.q ? r.q.db2 : "", r.neff, r.q ? r.q.neff : ""];
   } else {
     cols = ["kBT/eps", "B2/sig^3", "dB2*/dT*", "d2B2*/dT*^2", "n_eff"];
@@ -670,7 +734,7 @@ function copyTable() {
     $("tspace").onchange = compute;
     for (const id of ["tmin", "tmax", "npts"]) $(id).onchange = compute;
     $("mode").onchange = () => { syncMode(); compute(); };
-    $("gas").onchange = () => { if (modeSel.value === "real") compute(); };
+    $("species").onchange = () => { if (modeSel.value === "real") { syncSpecies(); compute(); } };
     $("wkorder").onchange = () => { if (modeSel.value === "real") compute(); };
     for (const id of ["rtmin", "rtmax", "rnpts"]) $(id).onchange = () => { if (modeSel.value === "real") compute(); };
     $("rtspace").onchange = () => { if (modeSel.value === "real") compute(); };

@@ -202,6 +202,60 @@ mod tests {
     }
 
     #[test]
+    fn molecule_b2_and_derivs_classical_matches_b2() {
+        // The vector-cubature classical B2 component must reproduce the scalar b2().
+        use potter_poc::molecule::{co2_hellmann, n2_trappe};
+        let n2 = n2_trappe(); // Linear (LJ + charge), rmin=0
+        for &t in &[150.0_f64, 300.0] {
+            let (d, _) = n2.b2_and_derivs(t, 1e-3);
+            let (b, _) = n2.b2(t, 1e-3);
+            assert!((d.b2 - b).abs() < 0.2, "TraPPE N2 T={t}: {} vs b2 {}", d.b2, b);
+        }
+        let co2 = co2_hellmann(); // RigidLinear, rmin=2
+        for &t in &[250.0_f64, 500.0] {
+            let (d, _) = co2.b2_and_derivs(t, 1e-3);
+            let (b, _) = co2.b2(t, 1e-3);
+            assert!((d.b2 - b).abs() < 0.3, "Hellmann CO2 T={t}: {} vs b2 {}", d.b2, b);
+        }
+    }
+
+    #[test]
+    fn molecule_qfh_derivs_match_tabulated() {
+        // QFH B2 component vs the published SI tabulated values (reltol 1e-3, the web
+        // tolerance — verified to hold the bands tightly).
+        use potter_poc::molecule::{co2_hellmann, n2_hellmann};
+        // CO2: SI tabulates QFH directly (B_QFH col5) -> tight band.
+        let co2 = co2_hellmann();
+        for &(t, b_qfh) in &[(250.0, -184.16), (400.0, -59.87), (700.0, -1.30)] {
+            let (d, _) = co2.b2_qfh_and_derivs(t, 1e-3, 22.0045, 43.202);
+            assert!((d.b2 - b_qfh).abs() < 0.05, "CO2 QFH T={t}: {} vs SI {b_qfh}", d.b2);
+            assert!(d.neff(t).is_finite() && d.neff(t) > 0.0, "CO2 neff {}", d.neff(t));
+        }
+        // N2: SI tabulates WK; QFH differs by the higher-order resummation (measured
+        // ~0.12 cm^3/mol worst, at the coldest 90 K) -> band 0.2.
+        let n2 = n2_hellmann();
+        for &(t, si_wk) in &[(90.0, -195.57), (200.0, -35.66), (500.0, 16.61)] {
+            let (d, _) = n2.b2_qfh_and_derivs(t, 1e-3, 14.0067, 8.473);
+            assert!((d.b2 - si_wk).abs() < 0.2, "N2 QFH T={t}: {} vs SI(WK) {si_wk}", d.b2);
+        }
+    }
+
+    #[test]
+    fn molecule_qfh_db2dt_matches_fd() {
+        // dB2/dT (analytic chain-rule) vs a central FD of b2_qfh (CO2 @ 300 K).
+        // One point, reltol 1e-4 + h=2 K so the FD noise stays below the 3% band.
+        use potter_poc::molecule::co2_hellmann;
+        let co2 = co2_hellmann();
+        let (mu, i) = (22.0045, 43.202);
+        let (d, _) = co2.b2_qfh_and_derivs(300.0, 1e-4, mu, i);
+        let h = 2.0;
+        let (bp, _) = co2.b2_qfh(300.0 + h, 1e-4, mu, i);
+        let (bm, _) = co2.b2_qfh(300.0 - h, 1e-4, mu, i);
+        let fd = (bp - bm) / (2.0 * h);
+        assert!((d.db2_dt - fd).abs() / fd.abs() < 0.03, "CO2 dB2/dT {} vs FD {fd}", d.db2_dt);
+    }
+
+    #[test]
     fn hellmann_energy_matches_potter() {
         // Validate the coded potentials against potter's exact reference energies
         // (r in A; angles theta1, theta2, phi; V/kB in K).
