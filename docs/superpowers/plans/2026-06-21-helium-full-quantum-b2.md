@@ -15,7 +15,9 @@
 - `docs/refs/he/test.f90` — usage; its printed output is the port's ground truth (captured below).
 - `docs/refs/he/s4_he4prop.txt`, `s5_he3prop.txt`, `cencek_he4_neff_data.csv` — tabulated B, TB′, T²B″ (+ uncertainties).
 
-**Units convention (engine is in atomic units):** length Bohr a₀, energy Hartree E_h, mass electron-mass mₑ, ℏ=1. Constants: `HARTREE_K = 315774.65` (E_h→K), `A0_CM = 0.529177210903e-8` (a₀→cm), `N_A = 6.02214076e23`, `AMU_ME = 1822.888486209` (amu→mₑ). He nuclear reduced masses (mₑ): μ₄₄ = 7294.2995365/2, μ₃₃ = 5495.8852765/2. Atomic masses (amu) for the thermal wavelength: ⁴He 4.002602, ³He 3.0160293, Ne 20.1797.
+**Units convention (engine is in atomic units):** length Bohr a₀, energy Hartree E_h, mass electron-mass mₑ, ℏ=1. Constants: `HARTREE_K = 315774.65` (E_h→K), `A0_CM = 0.529177210903e-8` (a₀→cm), `N_A = 6.02214076e23`, `AMU_ME = 1822.888486209` (amu→mₑ). **Scattering & virial use ATOMIC masses** (Cencek/Hurly–Mehl convention): the pair reduced mass is μ = m_atom/2 with atomic masses (amu) ⁴He 4.002602, ³He 3.0160293, Ne 20.1797. The He **nuclear** masses (mₑ) Mnuc4 = 7294.2995365, Mnuc3 = 5495.8852765 are used **only** for the adiabatic-correction multiplier `mult` in the potential (Task 1), not for the Schrödinger equation or λ_T.
+
+**Authoritative B₂ formula (sourced from the original papers — no tuning).** Bell 2020 (the paper we reproduce) does *not* derive a Beth–Uhlenbeck formula: its Fig. 8 ⁴He curve is the *tabulated* fully-quantum B/n_eff of **Cencek et al., J. Chem. Phys. 136, 224303 (2012)** (Bell 2020 ref 56; the `s4_he4prop`/`s5_he3prop` SI tables), and its other noble gases use 3rd-order Wigner–Kirkwood (already implemented). Cencek 2012 computed those values with the phase-shift method of **Hurly & Mehl, "⁴He Thermophysical Properties: New Ab Initio Calculations," J. Res. Natl. Inst. Stand. Technol. 112, 75 (2007)**, Eqs. (9), (18)–(24) — reproduced verbatim in Task 4. The ³He Fermi spin-statistics (even-l ¼ singlet / odd-l ¾ triplet, ideal-term sign flip) follow from the standard identical-fermion result for nuclear spin I=½ (weights w_e = I/(2I+1)=¼, w_o = (I+1)/(2I+1)=¾). The Cencek SI tables (B, TB′, T²B″ with per-column uncertainties) are the a-priori validation anchor: a correct implementation of the published formula matches them within uncertainty with **no fitted constants**.
 
 **Ground-truth potential values** (from compiling `docs/refs/he/{potentials,test}.f90` with gfortran; V in K, r in Bohr):
 | r | V_BO | V_ad | V_rel | V_QED | V_tot |
@@ -378,7 +380,7 @@ EOF
 
 ## Task 4: Beth–Uhlenbeck B₂ for ⁴He (Bose, even l) + high-T classical limit
 
-**Files:** Modify `src/quantum.rs`; Test `src/main.rs`. **This task pins the overall normalization against the Cencek table + the classical high-T limit** (see note below).
+**Files:** Modify `src/quantum.rs`; Test `src/main.rs`. **Implements the published Hurly & Mehl 2007 formula verbatim (Eqs. 9, 18–24) — no fitted constants.** The Cencek 2012 table and the high-T classical limit are *validation*, not fitting targets.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -414,16 +416,17 @@ EOF
 Run: `cargo test he4_b2_matches_cencek`
 Expected: FAIL — `quantum_b2` not found.
 
-- [ ] **Step 3: Implement** — add to `src/quantum.rs`. **The structure is fixed; the single overall constant and the bound/ideal pieces are tuned to reproduce the Cencek values + the high-T classical limit** (the published table is ground truth — verify, don't assume):
+- [ ] **Step 3: Implement** — add to `src/quantum.rs`. **This is the Hurly & Mehl 2007 formula transcribed verbatim (Eqs. 9, 18–24); every prefactor is sourced, not fitted.** The doc-comment maps each line to its published equation.
 
 ```rust
-use crate::he_potential::{reduced_mass_me, v_he, He};
+use crate::he_potential::{v_he, He};
 
 const HARTREE_K: f64 = 315774.65;
 const A0_CM: f64 = 0.529177210903e-8;
 const N_A: f64 = 6.02214076e23;
 const AMU_ME: f64 = 1822.888486209;
 const PI: f64 = std::f64::consts::PI;
+const SQRT2: f64 = std::f64::consts::SQRT_2;
 
 #[derive(Clone, Copy)]
 pub enum Species { He4, He3, Ne }
@@ -443,121 +446,123 @@ fn potential(sp: Species) -> impl Fn(f64) -> f64 {
     }
 }
 
-/// Reduced mass (electron masses) of the colliding pair.
-fn mu_pair(sp: Species) -> f64 {
-    match sp { Species::Ne => mass_amu(sp) * AMU_ME / 2.0, s => reduced_mass_me(iso(s)) }
+/// Pair reduced mass μ (electron masses), ATOMIC masses (Cencek/Hurly–Mehl convention):
+/// μ = m_atom/2 for identical atoms. Chosen so E[K] = α κ² exactly (see `quantum_b2_parts`).
+fn mu_pair(sp: Species) -> f64 { mass_amu(sp) * AMU_ME / 2.0 }
+
+/// Statistical weight w_l of partial wave l in S(κ) = Σ_l w_l (2l+1) δ_l (Hurly–Mehl Eq. 9,
+/// generalized to nuclear spin). spin-0 bosons (⁴He, ²⁰Ne): even l weight 1, odd l 0.
+/// spin-½ fermion (³He, I=½): even l (singlet) w_e=I/(2I+1)=¼, odd l (triplet) w_o=(I+1)/(2I+1)=¾.
+fn l_weight(sp: Species, l: usize) -> f64 {
+    match sp {
+        Species::He4 | Species::Ne => if l % 2 == 0 { 1.0 } else { 0.0 },
+        Species::He3 => if l % 2 == 0 { 0.25 } else { 0.75 },
+    }
 }
 
+/// Ideal-gas (exchange) coefficient c so that B_ideal = c · N_A Λ³ (Hurly–Mehl Eq. 20,
+/// generalized: B_id = ∓ 2^{-5/2} λ_T³ N_A /(2I+1) = c N_A Λ³ with Λ=√2 λ_T, ∓ = −Bose/+Fermi).
+/// ⁴He & ²⁰Ne (boson, I=0): c = −1/16.  ³He (fermion, I=½): c = +1/32.
+fn c_ideal(sp: Species) -> f64 { match sp { Species::He3 => 1.0 / 32.0, _ => -1.0 / 16.0 } }
+
 /// Classical B2 (cm^3/mol) of the same potential, for the high-T anchor.
+/// B2 = -2 pi N_A int_0^inf (e^{-beta V} - 1) r^2 dr   [a0^3 per pair -> cm^3/mol].
 pub fn classical_b2(sp: Species, t: f64) -> f64 {
     let v = potential(sp);
     let beta = HARTREE_K / t; // 1/(kT) in 1/Hartree
-    // B2 = -2 pi N_A int_0^inf (e^{-beta V} - 1) r^2 dr   [a0^3 per pair -> cm^3/mol]
     let (n, rmax) = (200_000usize, 60.0_f64);
     let h = rmax / n as f64;
     let mut s = 0.0;
     for i in 0..=n {
-        let r = (i as f64 + 0.5) * h * if i == n { 0.0 } else { 1.0 } + i as f64 * 0.0 + i as f64 * h * 0.0 + r_of(i, h);
+        let r = (i as f64) * h + 1e-9; // small floor avoids r=0
         let f = ((-beta * v(r)).exp() - 1.0) * r * r;
         s += if i == 0 || i == n { 0.5 } else { 1.0 } * f;
     }
     -2.0 * PI * N_A * s * h * A0_CM.powi(3)
 }
-#[inline] fn r_of(i: usize, h: f64) -> f64 { (i as f64) * h + 1e-6 }
-
-/// Statistics: which l contribute and their weight, per species.
-fn l_weight(sp: Species, l: usize) -> f64 {
-    match sp {
-        Species::He4 | Species::Ne => if l % 2 == 0 { 1.0 } else { 0.0 }, // spin-0 boson: even l
-        Species::He3 => if l % 2 == 0 { 0.25 } else { 0.75 },             // spin-1/2 fermion
-    }
-}
 
 /// Fully-quantum B2 (cm^3/mol) via Beth-Uhlenbeck phase shifts.
-pub fn quantum_b2(sp: Species, t: f64) -> f64 {
-    quantum_b2_parts(sp, t).0
-}
+pub fn quantum_b2(sp: Species, t: f64) -> f64 { quantum_b2_parts(sp, t).0 }
 
-/// (B2, dB2/dT, d2B2/dT2) — all from the SAME T-independent delta_l(k) table.
+/// (B2, dB2/dT, d2B2/dT2) in cm^3/mol — the Beth–Uhlenbeck second virial coefficient and
+/// its analytic T-derivatives, exactly as published by Hurly & Mehl, J. Res. Natl. Inst.
+/// Stand. Technol. 112, 75 (2007), Eqs. (9),(18)-(24) (the method Cencek 2012 used):
+///
+///   B = B_th + B_ideal + B_bound                                              (18)
+///   B_th    = -2 N_A Λ³ α I₀ / (π T),   I₀ = ∫₀^∞ e^{-ακ²/T} S(κ) κ dκ          (19,22)
+///   B_ideal = c_ideal · N_A Λ³                                                (20)
+///   B_bound = -N_A Λ³ [e^{T_b/T} - 1]    (⁴He dimer: even l=0, (2l+1)=1)        (21)
+///   α = (mₑ/m_atom)(E_h/k_B) [K];   Λ = √2 λ_T,   λ_T = h/√(2π m_atom k_B T)     (23,24)
+///   S(κ) = Σ_l w_l (2l+1) δ_l(κ)                                               (9)
+/// Because μ = m_atom/2, Eq. (6) κ²=(2μ/mₑ)E gives E[K] = α κ² exactly. The T-derivatives
+/// reuse the SAME T-independent δ_l(k) table via κ-moments J_p = ∫ e^{-ακ²/T} S(κ) κ (ακ²)^p dκ.
 pub fn quantum_b2_parts(sp: Species, t: f64) -> (f64, f64, f64) {
     let v = potential(sp);
     let mu = mu_pair(sp);
-    let m = mass_amu(sp) * AMU_ME; // pair-atom mass in m_e (m = 2 mu for identical)
-    let beta = HARTREE_K / t;      // 1/Hartree
-    // thermal de Broglie wavelength lambda = h/sqrt(2 pi m kT), a.u. (h=2pi): a0
-    let lambda = (2.0 * PI * beta / m).sqrt();
-    let lam3_cm3mol = lambda.powi(3) * N_A * A0_CM.powi(3);
+    let m = mass_amu(sp) * AMU_ME;          // atomic mass in mₑ (= 2μ)
+    let beta = HARTREE_K / t;               // 1/Hartree
+    let lambda_t = (2.0 * PI * beta / m).sqrt();             // λ_T in Bohr (h=2π a.u.)
+    let na_l3 = N_A * (SQRT2 * lambda_t).powi(3) * A0_CM.powi(3); // N_A Λ³ [cm³/mol], Λ=√2 λ_T
+    let alpha = HARTREE_K / m;              // α = (mₑ/m_atom) E_h/k_B  [K]
 
-    // T-independent phase-shift table delta_l(k) on a k-grid; integrate the thermal
-    // weight and its T-derivatives analytically (d/dT brings down (E/kT^2) factors).
-    let lmax = 30usize;
-    let (nk, kmax) = (1200usize, 12.0_f64); // tune kmax so beta*E_max >> 1 at low T
+    // --- thermal (scattering) term: κ-moments of S(κ) ---
+    // J_p = ∫ e^{-ακ²/T} S(κ) κ (ακ²)^p dκ, trapezoid in κ; cutoff κ where e^{-ακ²/T}≈e^{-40}.
+    let lmax = 40usize;
+    let nk = 1200usize;
+    let kmax = (40.0 * t / alpha).sqrt();    // adapts with √T (high T needs larger κ)
     let hk = kmax / nk as f64;
-    let (mut s0, mut s1, mut s2) = (0.0, 0.0, 0.0);
-    // dδ/dk by central differences on the grid; trapezoid in k.
-    let phase_at = |k: f64| crate::quantum::phase_shifts(&v, mu, k, lmax, 1e-4, 400.0, 4000);
-    let mut prev: Option<(f64, Vec<f64>)> = None;
-    for ik in 1..=nk {
+    let (mut j0, mut j1, mut j2) = (0.0_f64, 0.0_f64, 0.0_f64);
+    for ik in 0..=nk {
         let k = ik as f64 * hk;
-        let dl = phase_at(k);
-        if let Some((kp, dlp)) = &prev {
-            let e = k * k / m;                 // E = hbar^2 k^2 / (2 mu) = k^2/m, a.u.
-            let bw = (-beta * e).exp();         // Boltzmann weight
-            // dδ_l/dk ~ (dl - dlp)/(k - kp); sum_l w (2l+1) ddl/dk
-            let mut wsum = 0.0;
-            for l in 0..=lmax {
-                let ddk = (dl[l] - dlp[l]) / (k - kp);
-                wsum += l_weight(sp, l) * (2 * l + 1) as f64 * ddk;
-            }
-            let g = bw * wsum;
-            // integrand contributions to B2 and its T-derivatives (d/dT of e^{-beta E}):
-            // dbeta/dT = -beta/T; so d(bw)/dT = (E beta / T) bw, etc.
-            let ek = e * HARTREE_K;             // E in K
-            s0 += g;
-            s1 += g * (ek / (t * t));           // partial from Boltzmann weight
-            s2 += g * (ek * ek / (t * t * t * t) - 2.0 * ek / (t * t * t));
-            let _ = (kp, dlp);
-        }
-        prev = Some((k, dl));
+        if k == 0.0 { continue; }            // integrand ∝ κ → 0
+        let dl = crate::quantum::phase_shifts(&v, mu, k, lmax, 1e-4, 400.0, 4000);
+        let mut s = 0.0;
+        for l in 0..=lmax { s += l_weight(sp, l) * (2 * l + 1) as f64 * dl[l]; }
+        let e = alpha * k * k;               // E in K
+        let w = (-e / t).exp() * s * k;      // e^{-ακ²/T} S(κ) κ
+        let tw = if ik == nk { 0.5 } else { 1.0 } * hk; // trapezoid weight
+        j0 += w * tw;
+        j1 += w * e * tw;
+        j2 += w * e * e * tw;
     }
-    let pref = -(2.0_f64.sqrt()) * lam3_cm3mol / PI; // Beth-Uhlenbeck scattering prefactor
-    let b_sc = pref * s0 * hk;
+    // B_th = A·J0, A = -2 N_A Λ³ α/(π T) ∝ T^{-5/2}; J0'(T)=J1/T², J0''=J2/T⁴-2J1/T³.
+    let a = -2.0 * na_l3 * alpha / (PI * t);
+    let b_th = a * j0;
+    let b_th_d1 = a * (-2.5 / t * j0 + j1 / (t * t));
+    let b_th_d2 = a * (8.75 / (t * t) * j0 - 7.0 * j1 / (t * t * t) + j2 / t.powi(4));
 
-    // bound state (4He only): B2_bound = -sqrt(2) lambda^3 N_A * (2l+1) e^{-beta E_b}
-    let mut b_bound = 0.0;
-    let mut bb1 = 0.0;
-    let mut bb2 = 0.0;
+    // --- ideal-gas (exchange) term: B_ideal = c N_A Λ³ ∝ T^{-3/2} ---
+    let b_id = c_ideal(sp) * na_l3;
+    let b_id_d1 = -1.5 / t * b_id;
+    let b_id_d2 = 3.75 / (t * t) * b_id;
+
+    // --- bound-state term (⁴He dimer only): B_bound = -N_A Λ³ [e^{T_b/T}-1] ---
+    let (mut b_bd, mut b_bd_d1, mut b_bd_d2) = (0.0, 0.0, 0.0);
     if let Species::He4 = sp {
         if let Some(eb) = crate::quantum::s_wave_bound_energy(&v, mu) {
-            let ebk = eb * HARTREE_K; // K (<0)
-            let e = (-beta * ebk).exp();
-            let amp = -(2.0_f64.sqrt()) * lam3_cm3mol;
-            b_bound = amp * e;
-            bb1 = amp * e * (-ebk / (t * t));
-            bb2 = amp * e * (ebk * ebk / (t * t * t * t) + 2.0 * ebk / (t * t * t));
+            let tb = -eb * HARTREE_K;        // T_b = |E_b| in K (>0)
+            let p = -na_l3;                  // P = -N_A Λ³ ∝ T^{-3/2}
+            let ex = (tb / t).exp();
+            let g = ex - 1.0;
+            let gp = -tb / (t * t) * ex;
+            let gpp = (tb * tb / t.powi(4) + 2.0 * tb / (t * t * t)) * ex;
+            b_bd = p * g;
+            b_bd_d1 = -1.5 / t * p * g + p * gp;
+            b_bd_d2 = 3.75 / (t * t) * p * g + 2.0 * (-1.5 / t * p) * gp + p * gpp;
         }
     }
-    // ideal-gas (exchange) term: B2_id = -2^{-5/2} lambda^3 N_A (boson). lambda^3 ~ T^{-3/2}.
-    let b_id = -(2.0_f64.powf(-2.5)) * lam3_cm3mol * stat_sign(sp);
-    // lambda^3 ∝ T^{-3/2} -> dB_id/dT = -3/(2T) B_id, etc. (chain on lam3 only)
-    let b2 = b_sc + b_bound + b_id;
-    // T-derivative of the lambda^3 prefactor (applies to all three terms uniformly via lam3):
-    // d(lam3)/dT = -3/(2T) lam3. Combine the lam3-chain with the Boltzmann/bound chains.
-    let d1 = (-1.5 / t) * (b_sc + b_id) + pref * s1 * hk + bb1 + (-1.5 / t) * b_bound;
-    let d2 = (3.75 / (t * t)) * (b_sc + b_id) + pref * s2 * hk + bb2 + (3.75 / (t * t)) * b_bound;
-    (b2, d1, d2)
-}
 
-fn stat_sign(sp: Species) -> f64 { match sp { Species::He3 => -1.0, _ => 1.0 } } // boson +, fermion -
+    (b_th + b_id + b_bd, b_th_d1 + b_id_d1 + b_bd_d1, b_th_d2 + b_id_d2 + b_bd_d2)
+}
 ```
 
-**IMPORTANT (normalization):** the structure above (scattering √2·λ³/π, bound √2·λ³, ideal 2^{−5/2}·λ³, the E=k²/m relation, statistics weights) is the standard Beth–Uhlenbeck form, but the exact prefactor and the ideal/bound sign conventions vary between textbooks. **The Cencek table and the high-T classical limit are the arbiters.** When you run Step 4: if the *shape* is right but values are off by a clean constant (e.g. √2, 2, or a sign), correct the single `pref`/`b_id`/`b_bound` normalization to match Cencek within uncertainty and the high-T limit to `classical_b2`. Do not loosen the test tolerances to paper over a real discrepancy — fix the constant.
+**Provenance (no fitting):** every constant above is from Hurly & Mehl 2007 Eqs. (9),(18)–(24): the −2/π and α prefactors of B_th, the −1/16 ideal coefficient (= −2^{−5/2} with Λ=√2 λ_T), the −[e^{T_b/T}−1] bound form, Λ=√2 λ_T, and the even-l S(κ) sum. The ³He pieces (c=+1/32, ¼/¾ weights) are the standard I=½ identical-fermion generalization. **Do not tune these to the table.** If Step 4 disagrees, the bug is numerical (κ/l grid, dimer E_b, units) — fix that, not the published constants. If after honest numerical effort a term is still off by a clean factor, STOP and report the discrepancy with the computed-vs-reference numbers rather than silently rescaling.
 
-- [ ] **Step 3b: Clean up `classical_b2`** — the `r_of`/midpoint scaffolding above is deliberately explicit; simplify to a clean trapezoid `r = i*h` (with a small `1e-9` floor at i=0 to avoid r=0) returning the same value, and delete the unused helpers. Verify `classical_b2(He4, 500.0)` is finite and ~11 cm³/mol.
+- [ ] **Step 3b: Sanity-check `classical_b2`** — verify `classical_b2(Species::He4, 500.0)` is finite and ≈ 11 cm³/mol (it is the high-T limit of `quantum_b2`). No scaffolding to remove; the trapezoid is already clean.
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cargo test he4_b2_matches_cencek quantum_b2_high_t_to_classical` (run each separately — cargo takes one filter). 4-D-free but the k×l×r loops are heavy: allow ~1–2 min. Expected: PASS once the normalization is pinned. Report the computed-vs-reference B2 at each T.
+Run: `cargo test he4_b2_matches_cencek quantum_b2_high_t_to_classical` (run each separately — cargo takes one filter). 4-D-free but the k×l×r loops are heavy: allow ~1–2 min. Expected: PASS directly from the published formula. Report the computed-vs-reference B2 at each T. If the 500 K point undershoots, the high-l Born tail is truncated — raise `lmax` (the Fig. 8 peak region at ~10 K needs only l≲20, so low-T is robust); do **not** touch the prefactors.
 
 - [ ] **Step 5: Commit**
 
@@ -566,9 +571,10 @@ git add src/quantum.rs src/main.rs
 git commit -m "$(cat <<'EOF'
 Add Beth-Uhlenbeck B2 for 4He (Bose, even l) + classical high-T anchor
 
-Scattering + bound (dimer) + ideal terms; normalization pinned to the
-Cencek 2012 table within its uncertainties and to the classical limit
-at high T.
+Thermal (scattering) + ideal (exchange) + bound (dimer) terms, transcribed
+verbatim from Hurly & Mehl 2007 (J. Res. NIST 112, 75), Eqs. 9 & 18-24 --
+the method Cencek 2012 used. No fitted constants; validated against the
+Cencek 2012 table within its uncertainties and the classical high-T limit.
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 EOF
@@ -639,7 +645,7 @@ EOF
 
 ## Task 6: ³He (Fermi statistics) vs the tabulated table
 
-**Files:** Test `src/main.rs` (the engine already dispatches `Species::He3`; this validates the Fermi weights). If the ¼/¾ even/odd split + fermion ideal sign are wrong, fix them in `l_weight`/`stat_sign`.
+**Files:** Test `src/main.rs` (the engine already dispatches `Species::He3`; this validates the Fermi weights). The statistics are **sourced, not fitted**: ³He has nuclear spin I=½, so the standard identical-fermion result gives the even-l (spatially-symmetric, nuclear-singlet) weight w_e = I/(2I+1) = ¼ and the odd-l (spatially-antisymmetric, nuclear-triplet) weight w_o = (I+1)/(2I+1) = ¾ — encoded in `l_weight(Species::He3, …)`. The ideal-gas (exchange) term flips sign and carries the 1/(2I+1)=½ spin-degeneracy factor: B_ideal = +2^{-5/2} λ_T³ N_A/2 = +N_A Λ³/32 — encoded as `c_ideal(Species::He3) = +1/32`. ³He has **no** bound dimer (Task 3), so B_bound = 0. This task confirms those a-priori weights reproduce the Cencek ³He table; it should pass with no code change.
 
 - [ ] **Step 1: Write the test**
 
@@ -659,7 +665,7 @@ EOF
 - [ ] **Step 2: Run**
 
 Run: `cargo test he3_b2_matches_cencek`
-Expected: PASS if the Fermi weights are right. If it FAILS, the ³He statistics are the suspect — verify the even-l ¼ (singlet) / odd-l ¾ (triplet) weighting and the fermion ideal-term sign in `l_weight`/`stat_sign` against the tabulated values; this is the spec's flagged risk. If it cannot be made to match within ~0.15 cm³/mol after honest effort, STOP and report — do not loosen the band; we may ship ⁴He+Ne and defer ³He.
+Expected: PASS — the sourced Fermi weights (`l_weight`/`c_ideal` for `Species::He3`) reproduce the Cencek ³He table directly. If it FAILS, the bug is numerical (same κ/l grid as ⁴He) or a units slip, **not** the statistics (those are the a-priori I=½ values, already validated by the ⁴He boson case sharing the same code path). If it cannot be made to match within ~0.15 cm³/mol after honest numerical effort, STOP and report the computed-vs-reference numbers — do not loosen the band; we may ship ⁴He+Ne and defer ³He.
 
 - [ ] **Step 3: Commit**
 
@@ -954,8 +960,8 @@ EOF
 - §7 wasm + web → Tasks 8, 9. ✓
 - §8 validation (port table, ⁴He/³He vs tabulated within uncertainties, dimer, Ne-vs-WK, high-T classical, Fig. 8) → Tasks 1,3,4,5,6,7,10. ✓ (LM2M2 method check from §8.7 is *subsumed* by the square-well analytic check in Task 2 + the Cencek validation — noted as a deliberate simplification: the square well is a cleaner closed-form engine check than LM2M2.)
 - §9 out of scope (mixtures, 2017 potential, B₃, H₂) → not in any task. ✓
-- §10 risks → addressed (³He gated in Task 6 with a stop-and-report; normalization pinned in Task 4; dimer tuning in Task 3; perf via `#[ignore]` note in Task 10).
+- §10 risks → addressed (³He gated in Task 6 with a stop-and-report; Task 4 uses the published Hurly–Mehl formula with no fitted constants — a discrepancy is a numerical bug to fix, not a constant to tune; dimer convergence tuning in Task 3; perf via `#[ignore]` note in Task 10).
 
-**Placeholder scan:** the one deliberate non-literal is the Beth–Uhlenbeck **normalization constant** in Task 4 — explicitly flagged as "pin against the Cencek table + classical limit," which is the correct method for reproducing a published calculation (the table is ground truth), not a hand-wave. All other steps have complete code + exact commands + concrete numeric anchors.
+**Placeholder scan:** no tuned constants. Task 4's prefactors are transcribed verbatim from Hurly & Mehl 2007 Eqs. (9),(18)–(24) (every line of `quantum_b2_parts` maps to a published equation in its doc-comment); the Cencek table is a *validation* anchor, not a fit target. All steps have complete code + exact commands + concrete numeric anchors.
 
-**Type consistency:** `He{He4,He3}`, `v_he`/`v_components`/`reduced_mass_me` (Task 1) used in Tasks 3,4. `riccati`/`phase_shifts`/`s_wave_phase_for_test` (Task 2) used in Task 4. `s_wave_bound_energy` (Task 3) used in Task 4. `Species{He4,He3,Ne}`, `quantum_b2`/`quantum_b2_parts`/`quantum_b2_neff`/`classical_b2` (Tasks 4–5) used in Tasks 6,7,8. `quantum_b2_neff_si`/`poc_quantum_b2` (Task 8) used in Tasks 9,10. Web `quantumRow`/`speciesInfo q:`/`syncSpecies` consistent (Task 9). Row shape `{T,num,db2,d2b2,neff,q,ex}` matches the existing real-fluids consumers.
+**Type consistency:** `He{He4,He3}`, `v_he`/`v_components`/`reduced_mass_me` (Task 1); `reduced_mass_me` is used by Task 3's standalone dimer test, while the shipped virial path (Task 4) uses atomic-mass `mu_pair` (= m_atom/2) for consistency with α — both recover the ~−1.1 mK ⁴He dimer within Task 3's tolerance. `riccati`/`phase_shifts`/`s_wave_phase_for_test` (Task 2) used in Task 4. `s_wave_bound_energy` (Task 3) used in Task 4. `Species{He4,He3,Ne}`, `quantum_b2`/`quantum_b2_parts`/`quantum_b2_neff`/`classical_b2` and helpers `l_weight`/`c_ideal`/`mu_pair` (Tasks 4–5) used in Tasks 6,7,8. `quantum_b2_neff_si`/`poc_quantum_b2` (Task 8) used in Tasks 9,10. Web `quantumRow`/`speciesInfo q:`/`syncSpecies` consistent (Task 9). Row shape `{T,num,db2,d2b2,neff,q,ex}` matches the existing real-fluids consumers.
