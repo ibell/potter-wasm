@@ -128,6 +128,47 @@ impl Linear {
         );
         (-0.25 * i * ANG3_TO_CM3MOL, nev)
     }
+
+    /// B2 (cm^3/mol) and its first two T-derivatives, via the shared-grid vector
+    /// 4-D cubature differentiating e^{-U/T} analytically (U is T-independent) —
+    /// the Stockmayer pattern. Gives n_eff via `B2Derivs::neff`.
+    pub fn b2_and_derivs(&self, t: f64, reltol: f64) -> (B2Derivs, usize) {
+        let integrand = |x: &[f64]| -> [f64; 3] {
+            let (s, th1, th2, phi) = (x[0], x[1], x[2], x[3]);
+            let om = 1.0 - s;
+            if om <= 0.0 {
+                return [0.0; 3];
+            }
+            let r = s / om;
+            let w = r * r / (om * om) * th1.sin() * th2.sin(); // r^2 * Jacobian * angular
+            let u = self.energy(r, th1, th2, phi);
+            let (f0, f1, f2) = if u.is_finite() {
+                let e = (-u / t).exp();
+                let t2 = t * t;
+                (e - 1.0, e * u / t2, e * (u * u / (t2 * t2) - 2.0 * u / (t2 * t)))
+            } else {
+                (-1.0, 0.0, 0.0)
+            };
+            let mut out = [f0 * w, f1 * w, f2 * w];
+            for v in out.iter_mut() {
+                if !v.is_finite() {
+                    *v = 0.0;
+                }
+            }
+            out
+        };
+        let (i, _e, nev) = hcubature3(
+            4,
+            &integrand,
+            &[0.0, 0.0, 0.0, 0.0],
+            &[1.0, PI, PI, 2.0 * PI],
+            0.03,
+            reltol,
+            20_000_000,
+        );
+        let k = -0.25 * ANG3_TO_CM3MOL;
+        (B2Derivs { b2: k * i[0], db2_dt: k * i[1], d2b2_dt2: k * i[2] }, nev)
+    }
 }
 
 /// 4-D orientational B2 integral for a linear molecule, shared by all models.
@@ -411,6 +452,117 @@ impl RigidLinear {
         // 2 Angstrom hard-core cutoff (matches potter) to avoid the unphysical
         // short-range point-charge Coulomb catastrophe of the exp-repulsion form.
         b2_orientational(|r, t1, t2, p| self.energy(r, t1, t2, p), t, reltol, 2.0)
+    }
+
+    /// Classical B2 (cm^3/mol) and its first two T-derivatives, shared-grid vector
+    /// 4-D cubature with the analytic Boltzmann derivatives + the 2 A hard-core
+    /// (rmin) treatment. The (2pi/3) rmin^3 term is T-independent -> B2 only.
+    pub fn b2_and_derivs(&self, t: f64, reltol: f64) -> (B2Derivs, usize) {
+        let rmin = 2.0;
+        let s_lo = rmin / (1.0 + rmin);
+        let integrand = |x: &[f64]| -> [f64; 3] {
+            let (s, th1, th2, phi) = (x[0], x[1], x[2], x[3]);
+            let om = 1.0 - s;
+            if om <= 0.0 {
+                return [0.0; 3];
+            }
+            let r = s / om;
+            let w = r * r / (om * om) * th1.sin() * th2.sin();
+            let u = self.energy(r, th1, th2, phi);
+            let (f0, f1, f2) = if u.is_finite() {
+                let e = (-u / t).exp();
+                let t2 = t * t;
+                (e - 1.0, e * u / t2, e * (u * u / (t2 * t2) - 2.0 * u / (t2 * t)))
+            } else {
+                (-1.0, 0.0, 0.0)
+            };
+            let mut out = [f0 * w, f1 * w, f2 * w];
+            for v in out.iter_mut() {
+                if !v.is_finite() {
+                    *v = 0.0;
+                }
+            }
+            out
+        };
+        let (i, _e, nev) = hcubature3(
+            4,
+            &integrand,
+            &[s_lo, 0.0, 0.0, 0.0],
+            &[1.0, PI, PI, 2.0 * PI],
+            0.03,
+            reltol,
+            20_000_000,
+        );
+        let k = -0.25 * ANG3_TO_CM3MOL;
+        let d = B2Derivs {
+            b2: (-0.25 * i[0] + (2.0 * PI / 3.0) * rmin.powi(3)) * ANG3_TO_CM3MOL,
+            db2_dt: k * i[1],
+            d2b2_dt2: k * i[2],
+        };
+        (d, nev)
+    }
+
+    /// Quadratic Feynman-Hibbs quantum-corrected B2 (cm^3/mol) and its first two
+    /// T-derivatives. The effective potential psi = U/T + Q*B/T^2 (B = qc_bracket,
+    /// T-independent) is T-dependent, so the Mayer derivatives are a chain rule:
+    ///   f0 = e^{-psi} - 1,  f1 = -psi' e^{-psi},  f2 = (psi'^2 - psi'') e^{-psi},
+    /// psi' = -U/T^2 - 2QB/T^3,  psi'' = 2U/T^3 + 6QB/T^4. Same rmin treatment.
+    pub fn b2_qfh_and_derivs(
+        &self,
+        t: f64,
+        reltol: f64,
+        mu_amu: f64,
+        i_amu_a2: f64,
+    ) -> (B2Derivs, usize) {
+        let (inv_mu, inv_i) = (1.0 / mu_amu, 1.0 / i_amu_a2);
+        let rmin = 2.0;
+        let s_lo = rmin / (1.0 + rmin);
+        let integrand = |x: &[f64]| -> [f64; 3] {
+            let (s, th1, th2, phi) = (x[0], x[1], x[2], x[3]);
+            let om = 1.0 - s;
+            if om <= 0.0 {
+                return [0.0; 3];
+            }
+            let r = s / om;
+            let w = r * r / (om * om) * th1.sin() * th2.sin();
+            let (u1, u2) = (axis(th1, 0.0), axis(th2, phi));
+            let com2 = [0.0, 0.0, r];
+            let u = self.energy_vec(com2, u1, u2);
+            let (f0, f1, f2) = if u.is_finite() {
+                let qb = Q_CONST * self.qc_bracket(com2, u1, u2, inv_mu, inv_i);
+                let (t2, t3, t4) = (t * t, t * t * t, t * t * t * t);
+                let psi = u / t + qb / t2;
+                let psip = -u / t2 - 2.0 * qb / t3;
+                let psipp = 2.0 * u / t3 + 6.0 * qb / t4;
+                let e = (-psi).exp();
+                (e - 1.0, -psip * e, (psip * psip - psipp) * e)
+            } else {
+                (-1.0, 0.0, 0.0)
+            };
+            let mut out = [f0 * w, f1 * w, f2 * w];
+            for v in out.iter_mut() {
+                if !v.is_finite() {
+                    *v = 0.0;
+                }
+            }
+            out
+        };
+        let (i, _e, nev) = hcubature3(
+            4,
+            &integrand,
+            &[s_lo, 0.0, 0.0, 0.0],
+            &[1.0, PI, PI, 2.0 * PI],
+            0.03,
+            reltol,
+            20_000_000,
+        );
+        let k = -0.25 * ANG3_TO_CM3MOL;
+        let d = B2Derivs {
+            b2: (-0.25 * i[0] + (2.0 * PI / 3.0) * rmin.powi(3)) * ANG3_TO_CM3MOL,
+            db2_dt: k * i[1],
+            d2b2_dt2: k * i[2],
+        };
+        (d, nev)
     }
 }
 

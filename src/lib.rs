@@ -69,6 +69,35 @@ pub fn noblegas_b2_neff(gas: u32, t: f64, order: u8) -> [f64; 8] {
     [b0, d0, e0, n0, bq, dq, eq, nq]
 }
 
+/// Molecular B₂ in physical units (cm³/mol, K): classical + (for the Hellmann ab
+/// initio models) the QFH quantum correction. `mol`: 0=TraPPE N₂, 1=EPM2 CO₂,
+/// 2=Hellmann N₂, 3=Hellmann CO₂. Returns
+/// `[b2_cl, db2_cl, d2b2_cl, neff_cl,  b2_q, db2_q, d2b2_q, neff_q]`; the quantum
+/// slots are NaN for the empirical (classical-only) models. μ/I per Hellmann SI.
+pub fn molecule_b2_neff(mol: u32, t: f64, reltol: f64) -> [f64; 8] {
+    use crate::molecule::{co2_epm2, co2_hellmann, n2_hellmann, n2_trappe};
+    let q4 = |d: B2Derivs| [d.b2, d.db2_dt, d.d2b2_dt2, d.neff(t)];
+    let (cl, qu): ([f64; 4], [f64; 4]) = match mol {
+        0 => (q4(n2_trappe().b2_and_derivs(t, reltol).0), [f64::NAN; 4]),
+        1 => (q4(co2_epm2().b2_and_derivs(t, reltol).0), [f64::NAN; 4]),
+        2 => {
+            let m = n2_hellmann();
+            (
+                q4(m.b2_and_derivs(t, reltol).0),
+                q4(m.b2_qfh_and_derivs(t, reltol, 14.0067, 8.473).0),
+            )
+        }
+        _ => {
+            let m = co2_hellmann();
+            (
+                q4(m.b2_and_derivs(t, reltol).0),
+                q4(m.b2_qfh_and_derivs(t, reltol, 22.0045, 43.202).0),
+            )
+        }
+    };
+    [cl[0], cl[1], cl[2], cl[3], qu[0], qu[1], qu[2], qu[3]]
+}
+
 /// Compile a DSL potential string and compute B3 at temperature `t`.
 pub fn b3_from_dsl(src: &str, eps: f64, sig: f64, t: f64, tol: f64) -> Result<f64, String> {
     let pot = Potential::compile(src, eps, sig)?;
@@ -79,7 +108,10 @@ pub fn b3_from_dsl(src: &str, eps: f64, sig: f64, t: f64, tol: f64) -> Result<f6
 /// linear memory via `poc_alloc`, then calls `poc_b2` / `poc_b3`.
 #[cfg(target_arch = "wasm32")]
 mod wasm_exports {
-    use super::{b2_derivs_from_dsl, b2_from_dsl, b3_from_dsl, noblegas_b2_neff, stockmayer_b2_derivs};
+    use super::{
+        b2_derivs_from_dsl, b2_from_dsl, b3_from_dsl, molecule_b2_neff, noblegas_b2_neff,
+        stockmayer_b2_derivs,
+    };
     use std::alloc::{alloc, dealloc, Layout};
 
     #[no_mangle]
@@ -169,6 +201,20 @@ mod wasm_exports {
     #[no_mangle]
     pub extern "C" fn poc_noblegas(gas: u32, t: f64, order: u32, out: *mut f64) {
         let vals = noblegas_b2_neff(gas, t, order as u8);
+        unsafe {
+            for (k, v) in vals.iter().enumerate() {
+                out.add(k).write_unaligned(*v);
+            }
+        }
+    }
+
+    /// Molecular B₂ (cm³/mol, K): classical + QFH quantum (Hellmann models). Writes
+    /// 8 f64 into `out`: [b2_cl,db2_cl,d2b2_cl,neff_cl, b2_q,db2_q,d2b2_q,neff_q]
+    /// (quantum slots NaN for the empirical classical-only models). `mol`: 0=TraPPE
+    /// N₂, 1=EPM2 CO₂, 2=Hellmann N₂, 3=Hellmann CO₂. Unaligned writes.
+    #[no_mangle]
+    pub extern "C" fn poc_molecule(mol: u32, t: f64, reltol: f64, out: *mut f64) {
+        let vals = molecule_b2_neff(mol, t, reltol);
         unsafe {
             for (k, v) in vals.iter().enumerate() {
                 out.add(k).write_unaligned(*v);
