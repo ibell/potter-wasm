@@ -6,6 +6,7 @@ pub mod aot;
 pub mod cubature;
 pub mod dsl;
 pub mod fastpot;
+pub mod he_potential;
 pub mod integrate;
 pub mod molecule;
 pub mod msmc;

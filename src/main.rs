@@ -296,6 +296,32 @@ mod tests {
     }
 
     #[test]
+    fn he_potential_matches_fortran() {
+        use potter_poc::he_potential::{v_components, He};
+        const TOK: f64 = 315774.65;
+        // (r_bohr, V_BO, V_ad, V_rel, V_QED, V_tot) in K — from the compiled SI Fortran.
+        let rows = [
+            (2.0, 36142.3480, 11.8173, -2.8634, 0.5100, 36151.8089),
+            (4.0, 292.5705, 0.1077, 0.0323, 0.0089, 292.7203),
+            (5.6, -11.0006, -0.0090, 0.0154, -0.0014, -10.9957),
+            (9.0, -0.9898, -0.0007, 0.0019, -0.0003, -0.9889),
+        ];
+        for &(r, bo, ad, rel, qed, tot) in &rows {
+            let c = v_components(r, false); // (bo, ad, rel, qed, tot) in Hartree
+            assert!((c.0 * TOK - bo).abs() < 1e-3, "V_BO r={r}: {}", c.0 * TOK);
+            assert!((c.1 * TOK - ad).abs() < 1e-3, "V_ad r={r}: {}", c.1 * TOK);
+            assert!((c.2 * TOK - rel).abs() < 1e-3, "V_rel r={r}: {}", c.2 * TOK);
+            assert!((c.3 * TOK - qed).abs() < 1e-3, "V_QED r={r}: {}", c.3 * TOK);
+            assert!((c.4 * TOK - tot).abs() < 1e-3, "V_tot r={r}: {}", c.4 * TOK);
+        }
+        let v56 = potter_poc::he_potential::v_he(He::He4, 5.6, false) * TOK;
+        assert!((v56 - (-10.9957)).abs() < 0.01, "He4 V(5.6)={v56}");
+        let d4 = potter_poc::he_potential::v_he(He::He4, 5.6, false);
+        let d3 = potter_poc::he_potential::v_he(He::He3, 5.6, false);
+        assert!((d4 - d3).abs() > 0.0, "3He != 4He potential");
+    }
+
+    #[test]
     fn msmc_b3_matches_cubature() {
         use potter_poc::b3_cubature_v;
         use potter_poc::msmc::msmc_b3_v;
