@@ -570,10 +570,15 @@ function renderPlotly(rows, hasExact, logX, opts = {}) {
   }
   if (o.series2) {
     const k = o.series2.key, c = o.series2.color, d = o.series2.dash || "dot";
-    traces[0].name = "classical"; // blue series gets a legend name
-    const s = (sel, axis) => { const t = line(rows.map(r => (r[k] ? r[k][sel] : null)), axis, c, d);
-      t.name = o.series2.name; return t; };
-    traces.push(s("b2", "y4"), s("db2", "y3"), s("d2b2", "y2"), s("neff", "y"));
+    // one legend entry per series across the 4 stacked panels (legendgroup +
+    // showlegend only on the first), so the legend reads "classical / <name>".
+    traces.forEach((t, idx) => { t.name = "classical"; t.legendgroup = "cl"; t.showlegend = idx === 0; });
+    const s = (sel, axis, first) => {
+      const t = line(rows.map(r => (r[k] ? r[k][sel] : null)), axis, c, d);
+      t.name = o.series2.name; t.legendgroup = "wk"; t.showlegend = first;
+      return t;
+    };
+    traces.push(s("b2", "y4", true), s("db2", "y3", false), s("d2b2", "y2", false), s("neff", "y", false));
   }
 
   const band = (lo, hi, title) => ({
