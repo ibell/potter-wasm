@@ -69,6 +69,66 @@ fn d_cos_sin(d: f64, jl: f64, yl: f64) -> f64 {
     d.cos() * jl - d.sin() * yl
 }
 
+// Inner cutoff (a0): the He repulsive wall is enormous (V(0.5)~2.6 Hartree), so
+// starting Numerov at r->0 overflows. The bound-state u(r) is utterly negligible
+// here (V ~ 1e5 K), so seeding u(R0)=0 is exact to machine precision. The result is
+// insensitive to R0 over [1.0, 2.0] (verified). Outer radius is far past the ~50 a0
+// halo; E_b is converged to <1e-4 mK at RMAX=800, N=40k (checked vs RMAX 5000, N 5e5).
+const BOUND_R0: f64 = 2.0;
+const BOUND_RMAX: f64 = 800.0;
+const BOUND_N: usize = 40_000;
+
+/// Number of l=0 nodes of the radial solution u'' = 2 mu (V - e) u, integrated
+/// outward by Numerov from R0 (seed u=0) to RMAX. At e=0 this is the Levinson count
+/// of s-wave bound states; for e<0 it jumps by one as e crosses each eigenvalue
+/// (above the eigenvalue the classically-forbidden tail diverges with a sign flip).
+fn s_wave_node_count<V: Fn(f64) -> f64>(v: &V, mu: f64, e: f64) -> usize {
+    let h = (BOUND_RMAX - BOUND_R0) / BOUND_N as f64;
+    let f = |r: f64| 2.0 * mu * (v(r) - e); // u'' = f(r) u
+    let w = |r: f64| 1.0 - h * h / 12.0 * f(r);
+    let (mut u0, mut u1) = (0.0_f64, 1e-30_f64);
+    let mut nodes = 0usize;
+    let mut r = BOUND_R0 + h;
+    for _ in 2..=BOUND_N {
+        let rn = r + h;
+        let u2 = ((12.0 - 10.0 * w(r)) * u1 - w(r - h) * u0) / w(rn);
+        if u1 * u2 < 0.0 {
+            nodes += 1;
+        }
+        u0 = u1;
+        u1 = u2;
+        r = rn;
+    }
+    nodes
+}
+
+/// s-wave bound-state energy (Hartree, <0) of the deepest/only state, or None.
+/// Shooting eigenvalue by node counting: the E<0 radial solution has 0 nodes below
+/// the ground-state eigenvalue and 1 above it, so the eigenvalue is the E at which
+/// the node count switches; bisect on that switch. Returns None when no E<0 in the
+/// search bracket produces a node (no bound state, e.g. 3He).
+pub fn s_wave_bound_energy<V: Fn(f64) -> f64>(v: &V, mu: f64) -> Option<f64> {
+    // Bracket below (deep, 0 nodes) and above (shallow, 1 node if a state exists).
+    let (mut lo, mut hi) = (-1e-6_f64, -1e-13_f64);
+    if s_wave_node_count(v, mu, hi) == 0 {
+        return None; // no bound state appears as E -> 0^-
+    }
+    // Ensure the lower bracket is below the eigenvalue (0 nodes); if even the deepest
+    // probe still shows a node, there's a deeper state than we model -> bail to None.
+    if s_wave_node_count(v, mu, lo) != 0 {
+        return None;
+    }
+    for _ in 0..60 {
+        let mid = 0.5 * (lo + hi);
+        if s_wave_node_count(v, mu, mid) == 0 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    Some(0.5 * (lo + hi))
+}
+
 /// Test helper: s-wave phase shift for a square well V=-v0 (r<rr) else 0.
 pub fn s_wave_phase_for_test(mu: f64, v0: f64, rr: f64, k: f64) -> f64 {
     let v = |r: f64| if r < rr { -v0 } else { 0.0 };

@@ -794,4 +794,20 @@ mod tests {
             assert!((num - exact).abs() < 2e-3, "k={k}: engine {num} vs exact {exact}");
         }
     }
+
+    #[test]
+    fn he4_dimer_binding_energy() {
+        use potter_poc::he_potential::{reduced_mass_me, v_he, He};
+        use potter_poc::quantum::s_wave_bound_energy;
+        let mu = reduced_mass_me(He::He4);
+        let v = |r: f64| v_he(He::He4, r, true); // Hartree
+        // returns Some(E_b<0 in Hartree) or None. ~ -1.1 mK = -3.48e-9 Hartree.
+        let eb = s_wave_bound_energy(&v, mu).expect("4He has one dimer");
+        let eb_mk = eb * 315774.65 * 1e3; // Hartree -> K -> mK
+        assert!(eb_mk < 0.0 && (eb_mk - (-1.1)).abs() < 0.6, "E_b = {eb_mk} mK (expect ~ -1.1)");
+        // 3He: no bound state
+        let mu3 = reduced_mass_me(He::He3);
+        let v3 = |r: f64| v_he(He::He3, r, true);
+        assert!(s_wave_bound_energy(&v3, mu3).is_none(), "3He has no dimer");
+    }
 }
