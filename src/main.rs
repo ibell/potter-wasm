@@ -796,6 +796,29 @@ mod tests {
     }
 
     #[test]
+    fn he4_b2_matches_cencek() {
+        use potter_poc::quantum::quantum_b2;
+        use potter_poc::quantum::Species;
+        let refs: [(f64, f64, f64); 5] =
+            [(4.0, -85.061, 0.06), (10.0, -23.125, 0.05), (20.0, -2.7464, 0.03),
+             (100.0, 11.6747, 0.02), (500.0, 11.00715, 0.02)];
+        for &(t, b, u) in &refs {
+            let got = quantum_b2(Species::He4, t);
+            assert!((got - b).abs() < u.max(0.1), "4He B2 T={t}: {got} vs {b} (±{u})");
+        }
+    }
+
+    #[test]
+    fn quantum_b2_high_t_to_classical() {
+        use potter_poc::quantum::{quantum_b2, classical_b2, Species};
+        for &t in &[2000.0_f64, 5000.0] {
+            let q = quantum_b2(Species::He4, t);
+            let c = classical_b2(Species::He4, t);
+            assert!((q - c).abs() / c.abs() < 0.05, "T={t}: quantum {q} vs classical {c}");
+        }
+    }
+
+    #[test]
     fn he4_dimer_binding_energy() {
         use potter_poc::he_potential::{reduced_mass_me, v_he, He};
         use potter_poc::quantum::s_wave_bound_energy;
