@@ -140,8 +140,11 @@
       </label>
     </div>
     <div class="note">B₂ in cm³/mol vs T in K; <b>classical</b> vs
-      <b>Wigner–Kirkwood</b> order-N quantum correction. Potentials: Ne (Bich, MP 2008),
-      Ar (Vogel, MP 2010), Kr (Jäger, JCP 2016), Xe (Hellmann, JCP 2017).</div>
+      <b>Wigner–Kirkwood</b> order-N quantum correction. Potentials:
+      Ne (<a href="https://doi.org/10.1080/00268970801964207" target="_blank" rel="noopener">Bich, MP 2008</a>),
+      Ar (<a href="https://doi.org/10.1080/00268976.2010.507557" target="_blank" rel="noopener">Vogel, MP 2010</a>),
+      Kr (<a href="https://doi.org/10.1063/1.4943959" target="_blank" rel="noopener">Jäger, JCP 2016</a>),
+      Xe (<a href="https://doi.org/10.1063/1.4994267" target="_blank" rel="noopener">Hellmann, JCP 2017</a>).</div>
   </fieldset>
 
   <details class="defs" id="modeldefs">
