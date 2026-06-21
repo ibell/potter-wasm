@@ -345,13 +345,18 @@ function syncMode() {
 }
 
 // The WK-order control applies only to the noble gases (molecules use a fixed-form
-// quantum correction). Molecules are 4-D and heavy, so cap the default point count.
+// quantum correction). Molecules are 4-D and heavy, so cap the default point count;
+// they're also only meaningful well above ~150 K (below that B₂ is exponentially
+// huge and squashes the plot), so lift the default Tmin off the noble-gas 50 K.
 function syncSpecies() {
   const mol = ($("species").value || "").startsWith("mol");
   $("wkorderwrap").hidden = mol;
   if (mol) {
     const np = parseInt($("rnpts").value) || 24;
     if (np > 14) $("rnpts").value = 12; // keep the heavier 4-D sweep responsive
+    if ((parseFloat($("rtmin").value) || 0) < 120) $("rtmin").value = 150;
+  } else if ((parseFloat($("rtmin").value) || 0) >= 120) {
+    $("rtmin").value = 50; // restore the noble-gas default when leaving molecules
   }
 }
 
