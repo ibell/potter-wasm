@@ -149,14 +149,27 @@ impl TangToennies {
         self.b2_generic(t, order, &pv)
     }
 
-    /// B₂ [cm³/mol], dB₂/dT, d²B₂/dT² (via dual-T), and n_eff (paper Eq. 11), at
-    /// temperature `t` [K] and WK truncation `order`.
-    pub fn b2_neff(&self, t: f64, order: u8) -> (f64, f64, f64, f64) {
-        let pv = self.grid_potvals();
+    /// The T-independent precomputed grid (per point `[R_m, V_J, V'_{J/m},
+    /// V''_{J/m²}, V'''_{J/m³}]`). Build once and pass to `b2_neff_with_grid` to
+    /// avoid rebuilding it for every temperature / each WK order.
+    pub fn grid(&self) -> Vec<[f64; 5]> {
+        self.grid_potvals()
+    }
+
+    /// B₂ [cm³/mol], dB₂/dT, d²B₂/dT², n_eff at temperature `t` [K] and WK
+    /// truncation `order`, reusing a prebuilt grid from `grid()`.
+    pub fn b2_neff_with_grid(&self, t: f64, order: u8, pv: &[[f64; 5]]) -> (f64, f64, f64, f64) {
         let (b2, db2_dt, d2b2_dt2) =
-            num_dual::second_derivative(|tt| self.b2_generic(tt, order, &pv), t);
+            num_dual::second_derivative(|tt| self.b2_generic(tt, order, pv), t);
         let neff = -3.0 * (b2 + t * db2_dt) / (2.0 * t * db2_dt + t * t * d2b2_dt2);
         (b2, db2_dt, d2b2_dt2, neff)
+    }
+
+    /// B₂ [cm³/mol], dB₂/dT, d²B₂/dT², n_eff at temperature `t` [K], WK truncation
+    /// `order`. Builds the grid then delegates to `b2_neff_with_grid`.
+    pub fn b2_neff(&self, t: f64, order: u8) -> (f64, f64, f64, f64) {
+        let pv = self.grid_potvals();
+        self.b2_neff_with_grid(t, order, &pv)
     }
 }
 

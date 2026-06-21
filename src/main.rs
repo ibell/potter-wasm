@@ -636,6 +636,37 @@ mod tests {
     }
 
     #[test]
+    fn noblegas_grid_reuse_matches_b2_neff() {
+        use potter_poc::noblegas::argon_tt;
+        let g = argon_tt();
+        let pv = g.grid();
+        assert_eq!(pv.len(), 10000, "grid size");
+        for &(t, order) in &[(120.0_f64, 0u8), (300.0, 3), (800.0, 1)] {
+            let a = g.b2_neff_with_grid(t, order, &pv);
+            let b = g.b2_neff(t, order);
+            assert!((a.0 - b.0).abs() < 1e-12 && (a.1 - b.1).abs() < 1e-12
+                 && (a.2 - b.2).abs() < 1e-12 && (a.3 - b.3).abs() < 1e-12,
+                 "T={t} order={order}: {a:?} vs {b:?}");
+        }
+    }
+
+    #[test]
+    fn noblegas_b2_neff_array_classical_and_quantum() {
+        use potter_poc::{noblegas::argon_tt, noblegas_b2_neff};
+        // gas 1 = Argon; order 3 quantum. Returns
+        // [b2_cl,db2_cl,d2b2_cl,neff_cl, b2_q,db2_q,d2b2_q,neff_q].
+        let a = noblegas_b2_neff(1, 300.0, 3);
+        let g = argon_tt();
+        let cl = g.b2_neff(300.0, 0);
+        let q = g.b2_neff(300.0, 3);
+        assert!((a[0] - cl.0).abs() < 1e-12 && (a[3] - cl.3).abs() < 1e-12, "classical slot");
+        assert!((a[4] - q.0).abs() < 1e-12 && (a[7] - q.3).abs() < 1e-12, "quantum slot");
+        // quantum correction is a real shift at low T
+        let lo = noblegas_b2_neff(0, 50.0, 3); // Neon, 50 K
+        assert!((lo[0] - lo[4]).abs() > 1e-6, "Ne 50K classical vs WK differ");
+    }
+
+    #[test]
     fn noblegas_v_derivs_match_analytic() {
         use potter_poc::noblegas::argon_tt;
         // Argon at R=0.5 nm (TT branch); analytic reference from integrate_potentials.py
