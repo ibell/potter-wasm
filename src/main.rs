@@ -856,4 +856,16 @@ mod tests {
             .map(|&t| quantum_b2_neff(Species::He4, t).3).fold(0.0_f64, f64::max);
         assert!(peak > 100.0, "4He n_eff peak {peak} (expect ~140)");
     }
+
+    #[test]
+    #[ignore = "heavy phase-shift integration (~30 s release); run with --release -- --ignored"]
+    fn he3_b2_matches_cencek() {
+        use potter_poc::quantum::{quantum_b2, Species};
+        // 3He B2 (cm^3/mol) vs Cencek 2012 (fermion, spin-1/2: even-l 1/4, odd-l 3/4).
+        let refs = [(4.0, -62.311, 0.1), (10.0, -16.200, 0.06), (100.0, 12.0385, 0.03), (500.0, 11.05373, 0.02)];
+        for &(t, b, u) in &refs {
+            let got = quantum_b2(Species::He3, t);
+            assert!((got - b).abs() < u.max(0.15), "3He B2 T={t}: {got} vs {b}");
+        }
+    }
 }
