@@ -10,6 +10,21 @@
 
 **Reference spec:** `docs/superpowers/specs/2026-06-21-helium-full-quantum-b2-design.md`
 
+---
+
+## Implementation outcome (what actually shipped — read this first)
+
+The feature is complete for **⁴He and ³He** (the scientific core, reproducing Bell 2020 Fig. 8). A few deliberate deviations from the task-by-task plan below, all validated:
+
+- **Scattering engine = Numerov matching, not RK4 variable-phase.** The He repulsive wall is too stiff for RK4 on the nonlinear Calogero equation (not L-stable — it blows up unless given an impractical step, making runs hours long). Production `quantum_b2_parts` instead integrates the linear radial equation by **Numerov** and matches to free Riccati–Bessel, recovering the continuous Levinson-anchored δ_l(k) by k-unwrapping from a small-k node-count anchor (+ the dimer π for ⁴He). The RK4 `phase_shifts` is kept only for the Task 2 square-well unit test. Full table now runs in ~1 min (release). The Hurly–Mehl 2007 formula (Eqs. 9, 18–24) is still transcribed verbatim, no fitted constants.
+- **Validation (vs Cencek 2012, no tuning):** ⁴He within published uncertainty at 4–20 K (T=4: −85.0613 vs −85.061); TB′/T²B″ match (T=10: 41.026/−82.480 vs 41.022/−82.478); **n_eff peaks at 139.8 at 9 K** (Fig. 8 ≈ 140). ³He matches with the sourced I=½ Fermi weights (T=4: −62.312 vs −62.311). High-T → classical.
+- **Ne deferred (documented limitation).** Ne₂'s deep well supports multiple bound states across several l; the full Beth–Uhlenbeck B₂ needs their Levinson π's + B_bound terms (He needs only its single shallow dimer), and reaching higher T needs more partial waves than the high-l Bessel/matching is stable for. `Species::Ne` is documented high-T-only; use the existing Wigner–Kirkwood `noblegas` route for Ne. Task 7 became a trend-only guard.
+- **Web (Task 9) dropped.** These full-quantum calcs are seconds–minutes per point and wasm is single-threaded (no `thread::spawn`), so they are not interactive-viable. The `poc_quantum_b2` wasm export (Task 8) ships with a cfg-gated serial fallback for wasm and is exercised by `node/quantum-e2e.mjs`; the real-fluids web group was not added.
+- **Heavy tests are `#[ignore]`d** (run `cargo test --release -- --ignored`); routine `cargo test` stays fast (44 pass, 6 ignored).
+- **Reproduction tooling:** `examples/b2print.rs` (B₂ vs Cencek), `examples/neff_curve.rs` + `scripts/plot_neff.py` → `figures/neff_he_quantum.png` (n_eff(T) for ⁴He/³He overlaid with Cencek).
+
+The task-by-task plan below is preserved as the historical record; where it says "RK4 variable-phase for production B₂", "pin normalization", "Ne cross-check within 2 cm³/mol", or "web group", see the outcome above.
+
 **Local reference materials** (gitignored, present on disk — DO NOT commit; AIP copyright):
 - `docs/refs/he/potentials.f90` — the He–He potential Fortran to port.
 - `docs/refs/he/test.f90` — usage; its printed output is the port's ground truth (captured below).
