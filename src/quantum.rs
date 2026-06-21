@@ -436,6 +436,14 @@ pub fn quantum_b2_parts(sp: Species, t: f64) -> (f64, f64, f64) {
     )
 }
 
+/// (B2 [cm³/mol], dB2/dT, d2B2/dT2, n_eff) for a species at temperature T [K].
+/// The effective IPL exponent (Bell 2020 Eq. 11): n_eff = −3(B + TB′)/(2TB′ + T²B″).
+pub fn quantum_b2_neff(sp: Species, t: f64) -> (f64, f64, f64, f64) {
+    let (b2, db, d2b) = quantum_b2_parts(sp, t);
+    let neff = -3.0 * (b2 + t * db) / (2.0 * t * db + t * t * d2b);
+    (b2, db, d2b, neff)
+}
+
 // =========================================================================================
 // Variable-phase (Calogero) engine — used by the analytic square-well test only.
 // =========================================================================================

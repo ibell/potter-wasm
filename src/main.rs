@@ -795,7 +795,12 @@ mod tests {
         }
     }
 
+    // NOTE: the full-quantum B2/n_eff tests evaluate the phase-shift engine at several
+    // temperatures and take ~1-3 min each in release (far longer in debug), so they are
+    // #[ignore]d to keep routine `cargo test` fast. Run them explicitly with:
+    //   cargo test --release -- --ignored
     #[test]
+    #[ignore = "heavy phase-shift integration (~1 min release); run with --release -- --ignored"]
     fn he4_b2_matches_cencek() {
         use potter_poc::quantum::quantum_b2;
         use potter_poc::quantum::Species;
@@ -809,6 +814,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "heavy phase-shift integration (~15 s release); run with --release -- --ignored"]
     fn quantum_b2_high_t_to_classical() {
         use potter_poc::quantum::{quantum_b2, classical_b2, Species};
         for &t in &[2000.0_f64, 5000.0] {
@@ -832,5 +838,22 @@ mod tests {
         let mu3 = reduced_mass_me(He::He3);
         let v3 = |r: f64| v_he(He::He3, r, true);
         assert!(s_wave_bound_energy(&v3, mu3).is_none(), "3He has no dimer");
+    }
+
+    #[test]
+    #[ignore = "heavy phase-shift integration (~3 min release); run with --release -- --ignored"]
+    fn he4_neff_matches_cencek_and_fig8() {
+        use potter_poc::quantum::{quantum_b2_neff, Species};
+        // T*dB2/dT and T^2*d2B2/dT2 vs the Cencek 2012 tabulated TB', T^2B''.
+        let refs = [(10.0, 41.022, -82.478), (100.0, 2.0908, -6.9989), (500.0, -1.87546, 0.98256)];
+        for &(t, tbp, t2bpp) in &refs {
+            let (_b, db, d2b, _ne) = quantum_b2_neff(Species::He4, t);
+            assert!((t * db - tbp).abs() < 0.5 + 0.05 * tbp.abs(), "TB' T={t}: {} vs {tbp}", t * db);
+            assert!((t * t * d2b - t2bpp).abs() < 1.0 + 0.05 * t2bpp.abs(), "T2B'' T={t}: {} vs {t2bpp}", t * t * d2b);
+        }
+        // Fig. 8: the 4He n_eff peaks at ~140 near 8-10 K.
+        let peak = [6.0, 8.0, 10.0, 12.0, 15.0].iter()
+            .map(|&t| quantum_b2_neff(Species::He4, t).3).fold(0.0_f64, f64::max);
+        assert!(peak > 100.0, "4He n_eff peak {peak} (expect ~140)");
     }
 }
