@@ -52,17 +52,25 @@
       </select>
     </label>
   </fieldset>
-  <p class="sub">Type a pair potential V(r). It is compiled to a WebAssembly module
-     <em>in your browser</em> (AOT) and run natively to integrate
-     B₂ = −2π ∫₀<sup>∞</sup> (e<sup>−V/T</sup>−1) r² dr. Because V(r) is
-     T-independent, the same pass also returns the first two T-derivatives
-     (analytically) and the effective repulsive exponent
+  <div id="modelintro">
+    <p class="sub">Type a pair potential V(r). It is compiled to a WebAssembly module
+       <em>in your browser</em> (AOT) and run natively to integrate
+       B₂ = −2π ∫₀<sup>∞</sup> (e<sup>−V/T</sup>−1) r² dr. Because V(r) is
+       T-independent, the same pass also returns the first two T-derivatives
+       (analytically) and the effective repulsive exponent
+       n_eff = −3(B₂+T·B₂′)/(2T·B₂′+T²·B₂″).</p>
+    <p class="sub">Everything is in <b>reduced (dimensionless) units</b> — the model
+       potentials reduce with their own energy scale ε and length scale σ. The axes are
+       the dimensionless groups <b>B₂/σ³</b> vs <b>k<sub>B</sub>T/ε</b>; n_eff is
+       dimensionless. See the definitions below for how each starred quantity maps to a
+       real fluid (ε in J, σ in m, μ in C·m).</p>
+  </div>
+  <p class="sub" id="realintro" hidden>Second virial coefficient of a <b>real noble gas</b>
+     (Ne, Ar, Kr, Xe) from an <b>ab initio Tang–Toennies</b> pair potential, in
+     <b>physical units</b>: B₂ in cm³/mol vs T in K. Each temperature shows the
+     <b>classical</b> value and the <b>Wigner–Kirkwood</b> ħ²-series quantum correction
+     (to the chosen order); the same pass gives the T-derivatives and
      n_eff = −3(B₂+T·B₂′)/(2T·B₂′+T²·B₂″).</p>
-  <p class="sub">Everything is in <b>reduced (dimensionless) units</b> — the model
-     potentials reduce with their own energy scale ε and length scale σ. The axes are
-     the dimensionless groups <b>B₂/σ³</b> vs <b>k<sub>B</sub>T/ε</b>; n_eff is
-     dimensionless. See the definitions below for how each starred quantity maps to a
-     real fluid (ε in J, σ in m, μ in C·m).</p>
 
   <fieldset id="modelctl">
     <legend>potential</legend>
@@ -307,9 +315,11 @@ function syncPreset() {
 // Show the controls + definitions for the active mode; hide the other surface.
 function syncMode() {
   const real = modeSel.value === "real";
-  document.getElementById("modelctl").hidden = real;     // reduced potential fieldset
-  document.getElementById("modeltrange").hidden = real;  // reduced T* range fieldset
-  document.getElementById("modeldefs").hidden = real;    // reduced-unit defs
+  $("modelintro").hidden = real;   // reduced intro paragraphs
+  $("modelctl").hidden = real;     // reduced potential fieldset
+  $("modeltrange").hidden = real;  // reduced T* range fieldset
+  $("modeldefs").hidden = real;    // reduced-unit defs
+  $("realintro").hidden = !real;   // real-fluid intro paragraph
   $("realctl").hidden = !real;
   $("realdefs").hidden = !real;
 }
@@ -492,7 +502,7 @@ function plotOpts(real) {
 
 function renderTable(rows, hasExact, real = false) {
   if (real) {
-    let h = "<table><tr><th>T (K)</th><th>B₂ cl</th><th>B₂ WK</th>" +
+    let h = "<table><tr><th>T (K)</th><th>B₂ cl (cm³/mol)</th><th>B₂ WK (cm³/mol)</th>" +
             "<th>n_eff cl</th><th>n_eff WK</th></tr>";
     const fmt = (v) => (Number.isFinite(v) ? v.toPrecision(6) : "—");
     const f3 = (v) => (Number.isFinite(v) ? v.toFixed(3) : "—");
