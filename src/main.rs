@@ -868,4 +868,26 @@ mod tests {
             assert!((got - b).abs() < u.max(0.15), "3He B2 T={t}: {got} vs {b}");
         }
     }
+
+    // Ne full-quantum is a DEFERRED, partial feature (see Species::Ne docs): the engine omits
+    // Ne₂'s multiple deep bound states, so it is under-bound at low/moderate T and only trends
+    // toward the Wigner–Kirkwood route as T rises. This test guards that documented behavior
+    // (finite, and converging toward WK with increasing T) — it deliberately does NOT assert a
+    // tight quantitative match, which would require the deferred multi-bound-state solver.
+    #[test]
+    #[ignore = "heavy + Ne is a deferred partial feature; run with --release -- --ignored"]
+    fn ne_full_quantum_trends_to_wk() {
+        use potter_poc::noblegas::neon_tt;
+        use potter_poc::quantum::{quantum_b2, Species};
+        let (q100, q300) = (quantum_b2(Species::Ne, 100.0), quantum_b2(Species::Ne, 300.0));
+        let (w100, w300) = (neon_tt().b2(100.0, 3), neon_tt().b2(300.0, 3));
+        assert!(q100.is_finite() && q300.is_finite(), "Ne full-Q must be finite");
+        // gap to WK shrinks as T rises (bound-state deficit fades toward the classical limit).
+        assert!(
+            (q300 - w300).abs() < (q100 - w100).abs(),
+            "Ne full-Q should approach WK as T rises: |Δ300|={} vs |Δ100|={}",
+            (q300 - w300).abs(),
+            (q100 - w100).abs()
+        );
+    }
 }

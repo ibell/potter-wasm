@@ -23,6 +23,16 @@ const SQRT2: f64 = std::f64::consts::SQRT_2;
 pub enum Species {
     He4,
     He3,
+    /// ²⁰Ne (spin-0 boson). KNOWN LIMITATION: the full-quantum Ne result is only correct in
+    /// the high-T limit. Unlike He (one shallow ~1.6 mK s-wave dimer), the Ne₂ well (−42 K)
+    /// supports MULTIPLE deep bound states across several l (binding up to ~25 K). The full
+    /// Beth–Uhlenbeck B₂ needs their per-l Levinson π's and `B_bound = −NΛ³Σ(2l+1)[e^{T_b/T}−1]`
+    /// terms, which dominate at low/moderate T — and the engine currently enumerates only He's
+    /// single s-wave dimer, so Ne is under-bound below ~few×100 K (e.g. +62 cm³/mol off at 30 K,
+    /// +8 at 100 K, shrinking toward the classical limit as T rises). Reaching higher T to escape
+    /// the bound-state regime needs more partial waves than the high-l Bessel/matching is stable
+    /// for (NaN past l≈60). A correct Ne path requires a general all-l bound-state spectrum solver
+    /// + high-l stabilization (deferred). Use the existing Wigner–Kirkwood `noblegas` route for Ne.
     Ne,
 }
 
