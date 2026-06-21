@@ -890,4 +890,21 @@ mod tests {
             (q100 - w100).abs()
         );
     }
+
+    #[test]
+    #[ignore = "heavy phase-shift integration; run with --release -- --ignored"]
+    fn quantum_b2_neff_lib_matches_module() {
+        use potter_poc::quantum::{quantum_b2_neff, Species};
+        use potter_poc::quantum_b2_neff_si;
+        let a = quantum_b2_neff_si(0, 500.0); // 0=4He (high T = fastest)
+        let (b, db, d2b, ne) = quantum_b2_neff(Species::He4, 500.0);
+        assert!(
+            (a[0] - b).abs() < 1e-9
+                && (a[1] - db).abs() < 1e-9
+                && (a[2] - d2b).abs() < 1e-9
+                && (a[3] - ne).abs() < 1e-9,
+            "lib wrapper must match the module fn: {a:?} vs {:?}",
+            (b, db, d2b, ne)
+        );
+    }
 }

@@ -325,34 +325,47 @@ fn b2_moments(sp: Species, t: f64, mu: f64, alpha: f64, has_bound: bool) -> (f64
     let kmax = (SCAT_KF * t / alpha).sqrt();
     let hk = kmax / SCAT_NK as f64;
     let lcap = ((kmax * rmax).ceil() as usize).clamp(6, SCAT_LCAP);
-    let cores = std::thread::available_parallelism()
-        .map(|x| x.get())
-        .unwrap_or(1);
-    // 1) principal δ_l(k) on the κ-grid (parallel over k; each k is independent).
-    let princ: Vec<Vec<f64>> = std::thread::scope(|sc| {
-        let handles: Vec<_> = (0..cores)
-            .map(|c| {
-                let v = &v;
-                sc.spawn(move || {
-                    let mut local: Vec<(usize, Vec<f64>)> = Vec::new();
-                    let mut ik = c + 1;
-                    while ik <= SCAT_NK {
-                        let k = ik as f64 * hk;
-                        local.push((ik, phase_principal(v, mu, k, lcap, SCAT_R0, rmax, n)));
-                        ik += cores;
-                    }
-                    local
+    // 1) principal δ_l(k) on the κ-grid; each k is independent. Threaded on native, serial on
+    //    wasm32 (which has no thread::spawn) — the wasm path is correct but ~cores× slower.
+    #[cfg(not(target_arch = "wasm32"))]
+    let princ: Vec<Vec<f64>> = {
+        let cores = std::thread::available_parallelism()
+            .map(|x| x.get())
+            .unwrap_or(1);
+        std::thread::scope(|sc| {
+            let handles: Vec<_> = (0..cores)
+                .map(|c| {
+                    let v = &v;
+                    sc.spawn(move || {
+                        let mut local: Vec<(usize, Vec<f64>)> = Vec::new();
+                        let mut ik = c + 1;
+                        while ik <= SCAT_NK {
+                            let k = ik as f64 * hk;
+                            local.push((ik, phase_principal(v, mu, k, lcap, SCAT_R0, rmax, n)));
+                            ik += cores;
+                        }
+                        local
+                    })
                 })
-            })
-            .collect();
-        let mut all = vec![Vec::new(); SCAT_NK + 1];
-        for hnd in handles {
-            for (ik, d) in hnd.join().unwrap() {
-                all[ik] = d;
+                .collect();
+            let mut all = vec![Vec::new(); SCAT_NK + 1];
+            for hnd in handles {
+                for (ik, d) in hnd.join().unwrap() {
+                    all[ik] = d;
+                }
             }
+            all
+        })
+    };
+    #[cfg(target_arch = "wasm32")]
+    let princ: Vec<Vec<f64>> = {
+        let mut all = vec![Vec::new(); SCAT_NK + 1];
+        for ik in 1..=SCAT_NK {
+            let k = ik as f64 * hk;
+            all[ik] = phase_principal(&v, mu, k, lcap, SCAT_R0, rmax, n);
         }
         all
-    });
+    };
     // 2) Levinson anchor at the smallest k; fold the dimer π into l=0 for ⁴He.
     let mut anchor = phase_anchor(&v, mu, hk, lcap, SCAT_R0, rmax, n);
     if has_bound {

@@ -100,6 +100,20 @@ pub fn molecule_b2_neff(mol: u32, t: f64, reltol: f64) -> [f64; 8] {
     [cl[0], cl[1], cl[2], cl[3], qu[0], qu[1], qu[2], qu[3]]
 }
 
+/// Full-quantum (phase-shift) B₂ for a species: 0=⁴He, 1=³He, 2=Ne. Returns
+/// [B2, dB2/dT, d2B2/dT2, n_eff] (cm³/mol, K). NOTE: heavy (phase-shift integration);
+/// Ne is a high-T-only partial result (see `quantum::Species::Ne`).
+pub fn quantum_b2_neff_si(species: u32, t: f64) -> [f64; 4] {
+    use crate::quantum::Species;
+    let sp = match species {
+        0 => Species::He4,
+        1 => Species::He3,
+        _ => Species::Ne,
+    };
+    let (b, db, d2b, ne) = crate::quantum::quantum_b2_neff(sp, t);
+    [b, db, d2b, ne]
+}
+
 /// Compile a DSL potential string and compute B3 at temperature `t`.
 pub fn b3_from_dsl(src: &str, eps: f64, sig: f64, t: f64, tol: f64) -> Result<f64, String> {
     let pot = Potential::compile(src, eps, sig)?;
@@ -112,7 +126,7 @@ pub fn b3_from_dsl(src: &str, eps: f64, sig: f64, t: f64, tol: f64) -> Result<f6
 mod wasm_exports {
     use super::{
         b2_derivs_from_dsl, b2_from_dsl, b3_from_dsl, molecule_b2_neff, noblegas_b2_neff,
-        stockmayer_b2_derivs,
+        quantum_b2_neff_si, stockmayer_b2_derivs,
     };
     use std::alloc::{alloc, dealloc, Layout};
 
@@ -217,6 +231,20 @@ mod wasm_exports {
     #[no_mangle]
     pub extern "C" fn poc_molecule(mol: u32, t: f64, reltol: f64, out: *mut f64) {
         let vals = molecule_b2_neff(mol, t, reltol);
+        unsafe {
+            for (k, v) in vals.iter().enumerate() {
+                out.add(k).write_unaligned(*v);
+            }
+        }
+    }
+
+    /// Full-quantum (phase-shift) B₂ (cm³/mol, K): writes [B2, dB2/dT, d2B2/dT2, neff]
+    /// (4 f64) into `out`. `species`: 0=⁴He, 1=³He, 2=Ne. HEAVY — the phase-shift
+    /// integration runs single-threaded in wasm (no threads); expect seconds–minutes per
+    /// call. Ne is a high-T-only partial result. Unaligned writes.
+    #[no_mangle]
+    pub extern "C" fn poc_quantum_b2(species: u32, t: f64, out: *mut f64) {
+        let vals = quantum_b2_neff_si(species, t);
         unsafe {
             for (k, v) in vals.iter().enumerate() {
                 out.add(k).write_unaligned(*v);
