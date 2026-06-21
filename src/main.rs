@@ -296,6 +296,32 @@ mod tests {
     }
 
     #[test]
+    fn he_potential_matches_fortran() {
+        use potter_poc::he_potential::{v_components, He};
+        const TOK: f64 = 315774.65;
+        // (r_bohr, V_BO, V_ad, V_rel, V_QED, V_tot) in K — from the compiled SI Fortran.
+        let rows = [
+            (2.0, 36142.3480, 11.8173, -2.8634, 0.5100, 36151.8089),
+            (4.0, 292.5705, 0.1077, 0.0323, 0.0089, 292.7203),
+            (5.6, -11.0006, -0.0090, 0.0154, -0.0014, -10.9957),
+            (9.0, -0.9898, -0.0007, 0.0019, -0.0003, -0.9889),
+        ];
+        for &(r, bo, ad, rel, qed, tot) in &rows {
+            let c = v_components(r, false); // (bo, ad, rel, qed, tot) in Hartree
+            assert!((c.0 * TOK - bo).abs() < 1e-3, "V_BO r={r}: {}", c.0 * TOK);
+            assert!((c.1 * TOK - ad).abs() < 1e-3, "V_ad r={r}: {}", c.1 * TOK);
+            assert!((c.2 * TOK - rel).abs() < 1e-3, "V_rel r={r}: {}", c.2 * TOK);
+            assert!((c.3 * TOK - qed).abs() < 1e-3, "V_QED r={r}: {}", c.3 * TOK);
+            assert!((c.4 * TOK - tot).abs() < 1e-3, "V_tot r={r}: {}", c.4 * TOK);
+        }
+        let v56 = potter_poc::he_potential::v_he(He::He4, 5.6, false) * TOK;
+        assert!((v56 - (-10.9957)).abs() < 0.01, "He4 V(5.6)={v56}");
+        let d4 = potter_poc::he_potential::v_he(He::He4, 5.6, false);
+        let d3 = potter_poc::he_potential::v_he(He::He3, 5.6, false);
+        assert!((d4 - d3).abs() > 0.0, "3He != 4He potential");
+    }
+
+    #[test]
     fn msmc_b3_matches_cubature() {
         use potter_poc::b3_cubature_v;
         use potter_poc::msmc::msmc_b3_v;
@@ -746,5 +772,140 @@ mod tests {
         assert!((viadsl.db2_dt - viaclosure.db2_dt).abs() < 1e-9);
         assert!((viadsl.d2b2_dt2 - viaclosure.d2b2_dt2).abs() < 1e-9);
         assert!((viadsl.neff(t) - viaclosure.neff(t)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn phase_shift_square_well_s_wave() {
+        use potter_poc::quantum::{riccati, s_wave_phase_for_test};
+        // Riccati-Bessel sanity: ĵ_0(x)=sin x, ŷ_0(x)=-cos x; recurrence to l=2.
+        let (j, y) = riccati(2, 1.3_f64);
+        assert!((j[0] - 1.3_f64.sin()).abs() < 1e-12 && (y[0] + 1.3_f64.cos()).abs() < 1e-12);
+        // s-wave square well V=-V0 (r<R) else 0: delta0 = -kR + atan((k/k') tan(k' R)),
+        // k' = sqrt(k^2 + 2 mu V0). Test the variable-phase engine vs this closed form.
+        let (mu, v0, rr) = (1.0_f64, 2.0_f64, 1.5_f64);
+        for &k in &[0.4_f64, 1.0, 2.5] {
+            let kp = (k * k + 2.0 * mu * v0).sqrt();
+            let mut exact = -k * rr + ((k / kp) * (kp * rr).tan()).atan();
+            // fold the atan branch to match the engine's continuous accumulation near resonance
+            let num = s_wave_phase_for_test(mu, v0, rr, k);
+            let mut d = num - exact;
+            while d > std::f64::consts::PI / 2.0 { exact += std::f64::consts::PI; d = num - exact; }
+            while d < -std::f64::consts::PI / 2.0 { exact -= std::f64::consts::PI; d = num - exact; }
+            assert!((num - exact).abs() < 2e-3, "k={k}: engine {num} vs exact {exact}");
+        }
+    }
+
+    // NOTE: the full-quantum B2/n_eff tests evaluate the phase-shift engine at several
+    // temperatures and take ~1-3 min each in release (far longer in debug), so they are
+    // #[ignore]d to keep routine `cargo test` fast. Run them explicitly with:
+    //   cargo test --release -- --ignored
+    #[test]
+    #[ignore = "heavy phase-shift integration (~1 min release); run with --release -- --ignored"]
+    fn he4_b2_matches_cencek() {
+        use potter_poc::quantum::quantum_b2;
+        use potter_poc::quantum::Species;
+        let refs: [(f64, f64, f64); 5] =
+            [(4.0, -85.061, 0.06), (10.0, -23.125, 0.05), (20.0, -2.7464, 0.03),
+             (100.0, 11.6747, 0.02), (500.0, 11.00715, 0.02)];
+        for &(t, b, u) in &refs {
+            let got = quantum_b2(Species::He4, t);
+            assert!((got - b).abs() < u.max(0.1), "4He B2 T={t}: {got} vs {b} (±{u})");
+        }
+    }
+
+    #[test]
+    #[ignore = "heavy phase-shift integration (~15 s release); run with --release -- --ignored"]
+    fn quantum_b2_high_t_to_classical() {
+        use potter_poc::quantum::{quantum_b2, classical_b2, Species};
+        for &t in &[2000.0_f64, 5000.0] {
+            let q = quantum_b2(Species::He4, t);
+            let c = classical_b2(Species::He4, t);
+            assert!((q - c).abs() / c.abs() < 0.05, "T={t}: quantum {q} vs classical {c}");
+        }
+    }
+
+    #[test]
+    fn he4_dimer_binding_energy() {
+        use potter_poc::he_potential::{reduced_mass_me, v_he, He};
+        use potter_poc::quantum::s_wave_bound_energy;
+        let mu = reduced_mass_me(He::He4);
+        let v = |r: f64| v_he(He::He4, r, true); // Hartree
+        // returns Some(E_b<0 in Hartree) or None. ~ -1.1 mK = -3.48e-9 Hartree.
+        let eb = s_wave_bound_energy(&v, mu).expect("4He has one dimer");
+        let eb_mk = eb * 315774.65 * 1e3; // Hartree -> K -> mK
+        assert!(eb_mk < 0.0 && (eb_mk - (-1.1)).abs() < 0.6, "E_b = {eb_mk} mK (expect ~ -1.1)");
+        // 3He: no bound state
+        let mu3 = reduced_mass_me(He::He3);
+        let v3 = |r: f64| v_he(He::He3, r, true);
+        assert!(s_wave_bound_energy(&v3, mu3).is_none(), "3He has no dimer");
+    }
+
+    #[test]
+    #[ignore = "heavy phase-shift integration (~3 min release); run with --release -- --ignored"]
+    fn he4_neff_matches_cencek_and_fig8() {
+        use potter_poc::quantum::{quantum_b2_neff, Species};
+        // T*dB2/dT and T^2*d2B2/dT2 vs the Cencek 2012 tabulated TB', T^2B''.
+        let refs = [(10.0, 41.022, -82.478), (100.0, 2.0908, -6.9989), (500.0, -1.87546, 0.98256)];
+        for &(t, tbp, t2bpp) in &refs {
+            let (_b, db, d2b, _ne) = quantum_b2_neff(Species::He4, t);
+            assert!((t * db - tbp).abs() < 0.5 + 0.05 * tbp.abs(), "TB' T={t}: {} vs {tbp}", t * db);
+            assert!((t * t * d2b - t2bpp).abs() < 1.0 + 0.05 * t2bpp.abs(), "T2B'' T={t}: {} vs {t2bpp}", t * t * d2b);
+        }
+        // Fig. 8: the 4He n_eff peaks at ~140 near 8-10 K.
+        let peak = [6.0, 8.0, 10.0, 12.0, 15.0].iter()
+            .map(|&t| quantum_b2_neff(Species::He4, t).3).fold(0.0_f64, f64::max);
+        assert!(peak > 100.0, "4He n_eff peak {peak} (expect ~140)");
+    }
+
+    #[test]
+    #[ignore = "heavy phase-shift integration (~30 s release); run with --release -- --ignored"]
+    fn he3_b2_matches_cencek() {
+        use potter_poc::quantum::{quantum_b2, Species};
+        // 3He B2 (cm^3/mol) vs Cencek 2012 (fermion, spin-1/2: even-l 1/4, odd-l 3/4).
+        let refs: [(f64, f64, f64); 4] =
+            [(4.0, -62.311, 0.1), (10.0, -16.200, 0.06), (100.0, 12.0385, 0.03), (500.0, 11.05373, 0.02)];
+        for &(t, b, u) in &refs {
+            let got = quantum_b2(Species::He3, t);
+            assert!((got - b).abs() < u.max(0.15), "3He B2 T={t}: {got} vs {b}");
+        }
+    }
+
+    // Ne full-quantum is a DEFERRED, partial feature (see Species::Ne docs): the engine omits
+    // Ne₂'s multiple deep bound states, so it is under-bound at low/moderate T and only trends
+    // toward the Wigner–Kirkwood route as T rises. This test guards that documented behavior
+    // (finite, and converging toward WK with increasing T) — it deliberately does NOT assert a
+    // tight quantitative match, which would require the deferred multi-bound-state solver.
+    #[test]
+    #[ignore = "heavy + Ne is a deferred partial feature; run with --release -- --ignored"]
+    fn ne_full_quantum_trends_to_wk() {
+        use potter_poc::noblegas::neon_tt;
+        use potter_poc::quantum::{quantum_b2, Species};
+        let (q100, q300) = (quantum_b2(Species::Ne, 100.0), quantum_b2(Species::Ne, 300.0));
+        let (w100, w300) = (neon_tt().b2(100.0, 3), neon_tt().b2(300.0, 3));
+        assert!(q100.is_finite() && q300.is_finite(), "Ne full-Q must be finite");
+        // gap to WK shrinks as T rises (bound-state deficit fades toward the classical limit).
+        assert!(
+            (q300 - w300).abs() < (q100 - w100).abs(),
+            "Ne full-Q should approach WK as T rises: |Δ300|={} vs |Δ100|={}",
+            (q300 - w300).abs(),
+            (q100 - w100).abs()
+        );
+    }
+
+    #[test]
+    #[ignore = "heavy phase-shift integration; run with --release -- --ignored"]
+    fn quantum_b2_neff_lib_matches_module() {
+        use potter_poc::quantum::{quantum_b2_neff, Species};
+        use potter_poc::quantum_b2_neff_si;
+        let a = quantum_b2_neff_si(0, 500.0); // 0=4He (high T = fastest)
+        let (b, db, d2b, ne) = quantum_b2_neff(Species::He4, 500.0);
+        assert!(
+            (a[0] - b).abs() < 1e-9
+                && (a[1] - db).abs() < 1e-9
+                && (a[2] - d2b).abs() < 1e-9
+                && (a[3] - ne).abs() < 1e-9,
+            "lib wrapper must match the module fn: {a:?} vs {:?}",
+            (b, db, d2b, ne)
+        );
     }
 }

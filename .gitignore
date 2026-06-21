@@ -1,2 +1,5 @@
 /target
 .DS_Store
+
+# Local-only reference materials (e.g. copyrighted journal SI) — not redistributed
+docs/refs/
