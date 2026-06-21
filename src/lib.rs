@@ -13,6 +13,7 @@ pub mod msmc;
 pub mod noblegas;
 pub use noblegas::{argon_tt, krypton_tt, neon_tt, xenon_tt, TangToennies};
 pub mod physics;
+pub mod quantum;
 
 // cranelift emits native machine code, so the JIT backend is native-only.
 #[cfg(not(target_arch = "wasm32"))]

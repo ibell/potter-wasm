@@ -773,4 +773,25 @@ mod tests {
         assert!((viadsl.d2b2_dt2 - viaclosure.d2b2_dt2).abs() < 1e-9);
         assert!((viadsl.neff(t) - viaclosure.neff(t)).abs() < 1e-9);
     }
+
+    #[test]
+    fn phase_shift_square_well_s_wave() {
+        use potter_poc::quantum::{riccati, s_wave_phase_for_test};
+        // Riccati-Bessel sanity: ĵ_0(x)=sin x, ŷ_0(x)=-cos x; recurrence to l=2.
+        let (j, y) = riccati(2, 1.3_f64);
+        assert!((j[0] - 1.3_f64.sin()).abs() < 1e-12 && (y[0] + 1.3_f64.cos()).abs() < 1e-12);
+        // s-wave square well V=-V0 (r<R) else 0: delta0 = -kR + atan((k/k') tan(k' R)),
+        // k' = sqrt(k^2 + 2 mu V0). Test the variable-phase engine vs this closed form.
+        let (mu, v0, rr) = (1.0_f64, 2.0_f64, 1.5_f64);
+        for &k in &[0.4_f64, 1.0, 2.5] {
+            let kp = (k * k + 2.0 * mu * v0).sqrt();
+            let mut exact = -k * rr + ((k / kp) * (kp * rr).tan()).atan();
+            // fold the atan branch to match the engine's continuous accumulation near resonance
+            let num = s_wave_phase_for_test(mu, v0, rr, k);
+            let mut d = num - exact;
+            while d > std::f64::consts::PI / 2.0 { exact += std::f64::consts::PI; d = num - exact; }
+            while d < -std::f64::consts::PI / 2.0 { exact -= std::f64::consts::PI; d = num - exact; }
+            assert!((num - exact).abs() < 2e-3, "k={k}: engine {num} vs exact {exact}");
+        }
+    }
 }
